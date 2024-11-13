@@ -5,6 +5,8 @@ SponsorBlock_actiontype = "skip"
 SponsorBlock_api = "https://sponsor.ajay.app/api/"
 Youtube_api = "https://www.googleapis.com/youtube/v3/"
 
+# https://wiki.sponsor.ajay.app/w/Guidelines
+# https://wiki.sponsor.ajay.app/w/Types#Category
 skip_categories = (
     ("Sponsor", "sponsor"),
     ("Self Promotion", "selfpromo"),

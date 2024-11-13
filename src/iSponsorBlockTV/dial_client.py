@@ -2,6 +2,7 @@
 import asyncio
 import socket
 
+import aiohttp
 import ssdp
 import xmltodict
 from ssdp import network
@@ -88,10 +89,13 @@ async def find_youtube_app(web_session, url_location):
     # print(headers)
 
     data = xmltodict.parse(response)
+    print("find data:", data, headers,)
     name = data["root"]["device"]["friendlyName"]
     handler = Handler()
     handler.clear()
-    app_url = headers["application-url"]
+    app_url = headers.get("Application-URL")
+    if not app_url:
+        return None
     youtube_url = app_url + "YouTube"
     # print(youtube_url)
     async with web_session.get(youtube_url) as response:
@@ -100,6 +104,7 @@ async def find_youtube_app(web_session, url_location):
         # print(status_code)
     if status_code == 200:
         data = xmltodict.parse(response)
+        print("DIAL DATA", data)
         data = data["service"]
         screen_id = data["additionalData"]["screenId"]
         return {"screen_id": screen_id, "name": name, "offset": 0}
@@ -143,6 +148,21 @@ async def discover(web_session):
 
     devices = []
     for i in handler.devices:
-        devices.append(await find_youtube_app(web_session, i))
+        d = await find_youtube_app(web_session, i)
+        if not d:
+            continue
+        devices.append(d)
 
     return devices
+
+def _validate_pairing_code(pairing_code: str) -> bool:
+    try:
+        pairing_code = pairing_code.replace("-", "").replace(" ", "")
+        int(pairing_code)
+        return len(pairing_code) == 12
+    except ValueError:
+        return False  # not a number
+
+async def discover_devices(web_session: aiohttp.ClientSession) -> list[dict]:
+    dial_screens = await discover(web_session)
+    return dial_screens

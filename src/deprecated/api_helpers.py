@@ -1,11 +1,18 @@
+from __future__ import annotations
+
 import html
 from hashlib import sha256
+from typing import TYPE_CHECKING
 
 from aiohttp import ClientSession
 from cache import AsyncLRU
 
 from . import constants, dial_client
 from .conditional_ttl_cache import AsyncConditionalTTL
+
+if TYPE_CHECKING:
+    from ..types.video import Video, VideoListResponse
+
 
 
 def list_to_tuple(function):
@@ -25,6 +32,8 @@ class ApiHelper:
         self.skip_categories = config.skip_categories
         self.channel_whitelist = config.channel_whitelist
         self.skip_count_tracking = config.skip_count_tracking
+        self.minimum_skip_length = config.minimum_skip_length
+        self.autoplay = config.autoplay
         self.web_session = web_session
         self.num_devices = len(config.devices)
 
@@ -84,6 +93,7 @@ class ApiHelper:
         url = constants.Youtube_api + "search"
         async with self.web_session.get(url, params=params) as resp:
             data = await resp.json()
+
         if "error" in data:
             return channels
 
@@ -111,6 +121,24 @@ class ApiHelper:
             )
         return channels
 
+    async def get_video_from_id(self, video_id: str, /) -> Video:
+        part = "snippet,contentDetails,statistics"
+        params = {
+            "id": video_id,
+            "key": self.apikey,
+            "part": part,
+        }
+        url = constants.Youtube_api + "videos"
+        async with self.web_session.get(url, params=params) as resp:
+            data: VideoListResponse = await resp.json()
+
+        if "error" in data:
+            return
+
+        return data["items"][0]
+
+        # https://www.googleapis.com/youtube/v3/videos?part=snippet&id=xE_rMj35BIM&key=YOUR_KEY
+
     @list_to_tuple  # Convert list to tuple so it can be used as a key in the cache
     @AsyncConditionalTTL(
         time_to_live=300, maxsize=10
@@ -134,22 +162,25 @@ class ApiHelper:
         async with self.web_session.get(
             url, headers=headers, params=params
         ) as response:
-            response_json = await response.json()
-        if response.status != 200:
-            response_text = await response.text()
-            print(
-                f"Error getting segments for video {vid_id}, hashed as {vid_id_hashed}."
-                f" Code: {response.status} - {response_text}"
-            )
+            if response.status != 200:
+                response_text = await response.text()
+                print(
+                    f"Error getting segments for video {vid_id}, hashed as {vid_id_hashed}."
+                    f" Code: {response.status} - {response_text}"
+                )
             return [], True
-        for i in response_json:
-            if str(i["videoID"]) == str(vid_id):
-                response_json = i
-                break
-        return self.process_segments(response_json)
+
+        response_json = await response.json()
+        response_json = next(
+            (item for item in response_json if str(item["videoID"]) == str(vid_id)),
+            None,
+        )
+        if response_json is None:
+            print(f"No segments found for video {vid_id}.")
+        return self.process_segments(response_json, self.minimum_skip_length)
 
     @staticmethod
-    def process_segments(response):
+    def process_segments(response, minimum_skip_length=0):
         segments = []
         ignore_ttl = True
         try:
@@ -191,7 +222,9 @@ class ApiHelper:
                     segment_dict["start"] = segment_before_start
                     segment_dict["UUID"].extend(segment_before_UUID)
                     segments.pop()
-                segments.append(segment_dict)
+                # Only add segments greater than minimum skip length
+                if segment_dict["end"] - segment_dict["start"] > minimum_skip_length:
+                    segments.append(segment_dict)
         except Exception:
             pass
         return segments, ignore_ttl

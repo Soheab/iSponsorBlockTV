@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import time
+from typing import Any
 
 from appdirs import user_data_dir
 
@@ -12,11 +13,14 @@ from .constants import config_file_blacklist_keys
 
 
 class Device:
-    def __init__(self, args_dict):
+    def __init__(self, args_dict: dict[Any, Any]) -> None:
+        self.name = ""
         self.screen_id = ""
         self.offset = 0
         self.__load(args_dict)
         self.__validate()
+
+        self.args_dict = args_dict
 
     def __load(self, args_dict):
         for i in args_dict:
@@ -41,6 +45,10 @@ class Config:
         self.skip_count_tracking = True
         self.mute_ads = False
         self.skip_ads = False
+        self.autoplay = False
+        self.handle_shorts = False
+        self.device_name = "iSponsorBlockTV"
+        self.minimum_skip_length = 0
         self.__load()
 
     def validate(self):
@@ -110,6 +118,17 @@ class Config:
     def save(self):
         with open(self.config_file, "w", encoding="utf-8") as f:
             config_dict = self.__dict__
+            print("Saving config file", config_dict)
+            devices = config_dict["devices"]
+
+            jdevices = []
+            for dev in devices:
+                if isinstance(dev, Device):
+                    jdevices.append(dev.args_dict)
+                else:
+                    jdevices.append(dev)
+
+            config_dict["devices"] = jdevices
             # Don't save the config file name
             config_file = self.config_file
             data_dir = self.data_dir

@@ -1,35 +1,45 @@
+from __future__ import annotations
 import asyncio
 import logging
 import time
 from signal import SIGINT, SIGTERM, signal
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Coroutine, Optional
 
 import aiohttp
 
 from . import api_helpers, ytlounge
 
+if TYPE_CHECKING:
+    from .helpers import Config, Device
+
+
 
 class DeviceListener:
-    def __init__(self, api_helper, config, device, debug: bool):
+    def __init__(self, api_helper: api_helpers.ApiHelper, config: Config, device: Device, debug: bool, web_session) -> None:
         self.task: Optional[asyncio.Task] = None
         self.api_helper = api_helper
         self.offset = device.offset
         self.name = device.name
-        self.cancelled = False
+        self.cancelled: bool = False
         self.logger = logging.getLogger(f"iSponsorBlockTV-{device.screen_id}")
         if debug:
             self.logger.setLevel(logging.DEBUG)
         else:
             self.logger.setLevel(logging.INFO)
-        sh = logging.StreamHandler()
-        sh.setFormatter(
-            logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        )
-        self.logger.addHandler(sh)
-        self.logger.info(f"Starting device")
+
+        self.logger.info("Starting device")
         self.lounge_controller = ytlounge.YtLoungeApi(
-            device.screen_id, config, api_helper, self.logger
+            device.screen_id, config, api_helper, self.logger, web_session
         )
+
+        self.tasks: set[asyncio.Task] = set()
+        self.tasks_group = asyncio.TaskGroup()
+
+    def create_task(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task:
+        task = self.tasks_group.create_task(coro)
+        task.add_done_callback(lambda fut: self.tasks.discard(fut))
+        self.tasks.add(task)
+        return task
 
     # Ensures that we have a valid auth token
     async def refresh_auth_loop(self):
@@ -51,13 +61,13 @@ class DeviceListener:
     # Main subscription loop
     async def loop(self):
         lounge_controller = self.lounge_controller
-        while not lounge_controller.linked():
-            try:
-                self.logger.debug("Refreshing auth")
-                await lounge_controller.refresh_auth()
-            except:
-                await asyncio.sleep(10)
         while not self.cancelled:
+            while not lounge_controller.linked():
+                try:
+                    self.logger.debug("Refreshing auth")
+                    await lounge_controller.refresh_auth()
+                except:
+                    await asyncio.sleep(10)
             while not (await self.is_available()) and not self.cancelled:
                 await asyncio.sleep(10)
             try:
@@ -88,7 +98,7 @@ class DeviceListener:
         except:
             pass
         time_start = time.time()
-        self.task = asyncio.create_task(self.process_playstatus(state, time_start))
+        self.task = self.create_task(self.process_playstatus(state, time_start))
 
     # Processes the playback state change
     async def process_playstatus(self, state, time_start):
@@ -127,17 +137,33 @@ class DeviceListener:
     async def skip(self, time_to, position, uuids):
         await asyncio.sleep(time_to)
         self.logger.info("Skipping segment: seeking to %s", position)
-        await asyncio.create_task(self.api_helper.mark_viewed_segments(uuids))
-        await asyncio.create_task(self.lounge_controller.seek_to(position))
+        await self.create_task(self.api_helper.mark_viewed_segments(uuids))
+        await self.create_task(self.lounge_controller.seek_to(position))
 
     # Stops the connection to the device
     async def cancel(self):
         self.cancelled = True
-        try:
-            self.task.cancel()
-        except Exception:
-            pass
+        if self.task:
+            try:
+                await asyncio.sleep(0)
+                self.task.cancel()
+            except Exception:
+                pass
 
+        if self.tasks:
+            for i in self.tasks:
+                try:
+                    i.cancel()
+                except Exception:
+                    pass
+                
+        self.tasks.clear()
+       
+
+    async def close(self):
+        await self.cancel()
+        if self.lounge_controller.connected():
+            await self.lounge_controller.close()
 
 async def finish(devices):
     for i in devices:
@@ -155,7 +181,7 @@ def main(config, debug):
     web_session = aiohttp.ClientSession(loop=loop, connector=tcp_connector)
     api_helper = api_helpers.ApiHelper(config, web_session)
     for i in config.devices:
-        device = DeviceListener(api_helper, config, i, debug)
+        device = DeviceListener(api_helper, config, i, debug, web_session)
         devices.append(device)
         tasks.append(loop.create_task(device.loop()))
         tasks.append(loop.create_task(device.refresh_auth_loop()))
