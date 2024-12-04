@@ -1,23 +1,17 @@
 # https://gist.github.com/Soheab/f46fee27498aad4a8962d59b6f0415c6
 
 from __future__ import annotations
-from typing import Any, Callable, Coroutine, Generic, Optional, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Self, Union, Generic, Optional
+from collections.abc import Callable, Coroutine
 
-
-from discord import Interaction, TextStyle
+from discord import TextStyle, Interaction
 from discord.ui import Modal, TextInput
 from discord.utils import maybe_coroutine
 
 if TYPE_CHECKING:
-    from typing_extensions import Self
-
-
-if TYPE_CHECKING:
     from typing_extensions import TypeVar
 
-    ValueT = TypeVar(
-        "ValueT", Union[int, str, float, bool], int, str, float, bool, default=str
-    )
+    ValueT = TypeVar("ValueT", Union[int, str, float, bool], int, str, float, bool, default=str)
 else:
     from typing import TypeVar
 
@@ -29,9 +23,7 @@ class SimpleModalWaitFor(Modal, Generic[ValueT]):
         self,
         title: str = "Waiting For Input",
         *,
-        check: Optional[
-            Callable[[Self, Interaction], Union[Coroutine[Any, Any, bool], bool]]
-        ] = None,
+        check: Optional[Callable[[Self, Interaction], Union[Coroutine[Any, Any, bool], bool]]] = None,
         timeout: float = 30.0,
         input_label: str = "Input text",
         input_max_length: int = 100,
@@ -42,9 +34,7 @@ class SimpleModalWaitFor(Modal, Generic[ValueT]):
         forced_type: Optional[type[ValueT]] = None,
     ):
         super().__init__(title=title, timeout=timeout, custom_id="wait_for_modal")
-        self._check: Optional[
-            Callable[[Self, Interaction], Union[Coroutine[Any, Any, bool], bool]]
-        ] = check
+        self._check: Optional[Callable[[Self, Interaction], Union[Coroutine[Any, Any, bool], bool]]] = check
         self.value: Optional[ValueT] = None
         self.interaction: Optional[Interaction] = None
 

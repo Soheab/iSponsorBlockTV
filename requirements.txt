@@ -6,5 +6,4 @@ xmltodict==0.13.0
 
 # discord_bot
 git+https://github.com/rapptz/discord.py
-python-dotenv
 requests

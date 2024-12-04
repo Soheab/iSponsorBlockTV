@@ -1,29 +1,28 @@
 from __future__ import annotations
+from typing import Any, Literal
 
-import asyncio
-import logging
 import os
 import signal
-from typing import Any, Literal
+import asyncio
+import logging
+from pathlib import Path
 
 import aiohttp
 import discord
+from discord import app_commands
 import pyytlounge
 import pyytlounge.exceptions
-from discord import app_commands
-from dotenv import load_dotenv
 
-from iSponsorBlockTV import APIHelper, Config, Device, DeviceManager
-from video_player import VideoPlayer
+from src.utils import EnsureSession
+from src.config import Config
+from src.api_helper import APIHelper
+from src.device_manager import Device, DeviceManager
+from src.components.video_player import VideoPlayer
 
-load_dotenv()
-
-
-_log = logging.getLogger(__file__.split(os.sep)[-1].split(".")[0])
+_log = logging.getLogger(Path(__file__).parts[-1].split(".")[0])
 
 
 class BlockBotClient(discord.Client):
-    tcp_connector: aiohttp.TCPConnector
     web_session: aiohttp.ClientSession
     api_helper: APIHelper
     config: Config
@@ -44,6 +43,7 @@ class BlockBotClient(discord.Client):
         )
 
         self.video_channel: discord.TextChannel | None = None
+        self.config: Config = Config("config.json")
 
     def purge_all_video_messages(self) -> None:
         async def purge() -> None:
@@ -64,22 +64,13 @@ class BlockBotClient(discord.Client):
         return task
 
     def set_app_config(self) -> None:
-        self.config = Config("data/config.json")
-
         self.whitelisted_channels = {
             c["id"]: c["name"] for c in self.config.channel_whitelist
         }
-
-    def save_app_config(self) -> None:
-        self.config.channel_whitelist = [
-            {"id": _id, "name": name} for _id, name in self.whitelisted_channels.items()
-        ]
         self.config.save()
-        self.set_app_config()
 
     async def run_app(self) -> None:
-        self.tcp_connector = aiohttp.TCPConnector(ttl_dns_cache=300)
-        self.web_session = aiohttp.ClientSession(connector=self.tcp_connector)
+        self.web_session = EnsureSession(connector_cls=aiohttp.TCPConnector, connector_kwargs={"ttl_dns_cache": 300})  # type: ignore
         self.api_helper = APIHelper(
             config=self.config, web_session=self.web_session, discord_client=self
         )
@@ -109,6 +100,7 @@ class BlockBotClient(discord.Client):
 
     async def sync_commands(self) -> None:
         await self.tree.sync()
+        await self.tree.sync(guild=discord.Object(1237899371773694102))
 
     async def setup_hook(self) -> None:
         self.set_app_config()
@@ -118,7 +110,9 @@ class BlockBotClient(discord.Client):
 
         # await self.sync_commands()
 
-    async def close_app(self, disconnect: bool = False, off: bool = False) -> None:
+    async def close_app(
+        self, disconnect: bool = False, off: bool = False
+    ) -> None:  # noqa: PLR0912
         try:
             _log.info("Closing devices, disconnect? %s", disconnect)
             for device in self.devices:
@@ -311,7 +305,7 @@ async def change_category(
     view.add_item(slct)
     await interaction.response.send_message("Select the categories to skip", view=view)
     await view.wait()
-    client.save_app_config()
+    client.set_app_config()
 
 
 @client.tree.command(name="change-settings")
@@ -326,6 +320,7 @@ async def change_settings(
     autoplay: bool | None = None,
     handle_shorts: bool | None = None,
     device_name: str | None = None,
+    minimum_skip_length: int | None = None,
 ) -> None:
     updated = ""
     if api_key is not None and api_key != client.config.apikey:
@@ -355,12 +350,19 @@ async def change_settings(
             f"Device name updated from {client.config.device_name} to {device_name}\n"
         )
         client.config.device_name = device_name
+    if (
+        minimum_skip_length is not None
+        and minimum_skip_length != client.config.minimum_skip_length
+    ):
+        updated += f"Minimum skip length updated from {client.config.minimum_skip_length} to {minimum_skip_length}\n"
+        client.config.minimum_skip_length = minimum_skip_length
+        print("min", client.config.minimum_skip_length)
 
     if not updated:
         await interaction.response.send_message("No settings updated")
         return
 
-    client.save_app_config()
+    client.set_app_config()
     await interaction.response.send_message(f"Settings updated\n\n{updated}")
 
 
@@ -384,6 +386,7 @@ async def get_settings(interaction: discord.Interaction):
         f"**Handle shorts:** {client.config.handle_shorts}\n"
         f"**Device name:** {client.config.device_name}\n"
         f"**Channel whitelist:** {', '.join(client.whitelisted_channels.values()) or 'None'}"
+        f"**Minimum skip length:** {client.config.minimum_skip_length}"
     )
     await interaction.response.send_message(embed=emb)
 
@@ -395,11 +398,11 @@ async def get_settings(interaction: discord.Interaction):
 )
 @app_commands.allowed_installs(guilds=True, users=True)
 async def whitelist_channel(
-    interaction: discord.Interaction, name: str, id: str | None = None
+    interaction: discord.Interaction, name: str, channel_id: str | None = None
 ):
-    if id is not None:
-        client.add_channel_whitelist(name, id)
-        client.save_app_config()
+    if channel_id is not None:
+        client.add_channel_whitelist(name, channel_id)
+        client.set_app_config()
         await interaction.response.send_message(f"Channel {name} whitelisted!")
         return
 
@@ -414,7 +417,7 @@ async def whitelist_channel(
     if len(channels) == 1:
         _id, name, subs = channels[0]
         client.add_channel_whitelist(name, _id)
-        client.save_app_config()
+        client.set_app_config()
         await interaction.response.send_message(f"Channel {name} whitelisted!")
         return
 
@@ -435,7 +438,7 @@ async def whitelist_channel(
     _id, name = slct.selected
     client.add_channel_whitelist(name, _id)
 
-    client.save_app_config()
+    client.set_app_config()
     await interaction.followup.send(f"Channel {name} whitelisted!")
 
 
@@ -452,19 +455,16 @@ async def manage_video(
     device = client.devices[0]
     controller = device.controller
     video = controller.current_video
-    print("video", video, device, controller)
     if not video:
         await interaction.followup.send("No video playing")
         return
 
     video_id = video.video_id
-    print("video_id", video_id)
     if not video_id:
         await interaction.followup.send("No id not found")
         return
 
     avideo = await client.api_helper.get_video_from_id(video_id)
-    print("avideo", avideo)
     if not avideo:
         await interaction.followup.send("video not found")
         return
@@ -492,8 +492,7 @@ class LogHandler(logging.Handler):
             embed_color = discord.Color.yellow()
 
         created = f"<t:{int(record.created)}:R>"
-        # message_without_cb = f"{log_prefix} - {created}\n{log}"
-        print(log)  # noqa: T201
+        print(log)
         emb = discord.Embed(
             title=f"{log_prefix} - {created}",
             description=f"```ansi\n{log}\n```",
@@ -503,4 +502,9 @@ class LogHandler(logging.Handler):
 
 
 signal.signal(signal.SIGINT, signal.SIG_DFL)
-client.run(TOKEN, root_logger=True, log_handler=LogHandler(), log_formatter=discord.utils._ColourFormatter())  # type: ignore
+client.run(
+    client.config.discord_bot_token,
+    root_logger=True,
+    log_handler=LogHandler(),
+    log_formatter=discord.utils._ColourFormatter(),
+)  # type: ignore

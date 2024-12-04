@@ -11,13 +11,15 @@
 #   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
+# source: https://github.com/mikeshardmind/async-utils/blob/2fff43d35428937bbf6aa253d8d729db7cf3599e/async_utils/task_cache.py
+# modified to fit my needs
 
 from __future__ import annotations
+from typing import Any, TypeVar, ParamSpec
+from collections.abc import Callable, Hashable, Coroutine, Generator
 
 import asyncio
-from collections.abc import Callable, Coroutine, Hashable
 from functools import partial
-from typing import Any, Generic, ParamSpec, TypeVar
 
 from .cache_key import make_key
 
@@ -26,14 +28,21 @@ __all__ = ("taskcache", "LRU", "lrutaskcache")
 
 P = ParamSpec("P")
 T = TypeVar("T")
-K = TypeVar("K")
-V = TypeVar("V")
 
 
-class LRU(Generic[K, V]):
-    def __init__(self, maxsize: int, /):
+class TaskWrapper[T](asyncio.Task[T]):
+    def __await__(self) -> Generator[Any, Any, Any | object | tuple[()] | tuple[Any]]:
+        res = yield from super().__await__()
+        if isinstance(res, tuple) and len(res) > 1:
+            return res[0]
+
+        return res
+
+
+class LRU[K, V]:
+    def __init__(self, maxsize: int, /) -> None:
         self.cache: dict[K, V] = {}
-        self.maxsize = maxsize
+        self.maxsize: int = maxsize
 
     def get(self, key: K, default: T, /) -> V | T:
         if key not in self.cache:
@@ -45,7 +54,7 @@ class LRU(Generic[K, V]):
         self.cache[key] = self.cache.pop(key)
         return self.cache[key]
 
-    def __setitem__(self, key: K, value: V, /):
+    def __setitem__(self, key: K, value: V, /) -> None:
         self.cache[key] = value
         if len(self.cache) > self.maxsize:
             self.cache.pop(next(iter(self.cache)))
@@ -97,8 +106,19 @@ def taskcache(
 
 
 def _lru_evict(
-    ttl: float, cache: LRU[Hashable, Any], key: Hashable, _ignored_task: object
+    ttl: float,
+    cache: LRU[Hashable, Any],
+    key: Hashable,
+    task: asyncio.Task[tuple[list[Any], bool]],
 ) -> None:
+    if task.cancelled():
+        cache.remove(key)
+        return
+
+    if task.done() and (result := task.result()) and len(result) > 1 and result[1]:
+        cache.remove(key)
+        return
+
     asyncio.get_running_loop().call_later(ttl, cache.remove, key)
 
 
@@ -129,11 +149,9 @@ def lrutaskcache(
             try:
                 return internal_cache[key]
             except KeyError:
-                internal_cache[key] = task = asyncio.create_task(coro(*args, **kwargs))
-                if ttl is not None:
-                    task.add_done_callback(
-                        partial(_lru_evict, ttl, internal_cache, key)
-                    )
+                internal_cache[key] = task = TaskWrapper(coro(*args, **kwargs))
+                if ttl:
+                    task.add_done_callback(partial(_lru_evict, ttl, internal_cache, key))  # type: ignore
                 return task
 
         return wrapped

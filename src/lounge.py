@@ -1,21 +1,21 @@
 from __future__ import annotations
+from typing import TYPE_CHECKING, Any, Self, Literal, ParamSpec, overload
+from collections.abc import Callable
 
+from enum import Enum
 import asyncio
 import logging
-from collections.abc import Callable
-from enum import Enum
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Literal, ParamSpec, Self, overload
 
 from pyytlounge import YtLoungeApi
 
-from .events_handlers import WithEventsHandlers
 from .video import CurrentVideo
+from .events_handlers import WithEventsHandlers
 
 if TYPE_CHECKING:
-    from ..types.events import *  # noqa: F403
-    from ..types.video import Video
     from .api_helper import APIHelper
+    from .types.video import Video
+    from .types.events import *
 
 __all__ = ("LoungeAPI",)
 
@@ -115,7 +115,10 @@ def always_take_data(func: Callable[..., Any] | Callable[[], Any]) -> Any:
         try:
             return func(data)  # type: ignore
         except TypeError:
-            return func()  # type: ignore
+            try:
+                return func()  # type: ignore
+            except TypeError:
+                return func(data)  # type: ignore
 
     return wrapper
 
@@ -179,7 +182,7 @@ class LoungeAPI(YtLoungeApi, WithEventsHandlers):
 
     @cached_property
     def logger(self) -> Any:
-        return logging.getLogger(f"iSponsorBlockTV-{self.device_name}")
+        return logging.getLogger(f"iSponsorBlockTV-{self.device_name!r}")
 
     # # Ensures that we still are subscribed to the lounge
     async def _watchdog(self):
@@ -190,15 +193,14 @@ class LoungeAPI(YtLoungeApi, WithEventsHandlers):
             try:
                 self.subscribe_task.cancel()
             except Exception as e:
-                self.logger.error(f"Error cancelling subscribe task: {e}")
-                pass
+                self.logger.exception("Error cancelling subscribe task.", exc_info=e)
 
     # Subscribe to the lounge and start the watchdog
     async def subscribe_monitored(self, callback: Callable) -> asyncio.Task[Any]:
         self.callback: Callable = callback
         try:
             self.restart_watchdog()
-        except:
+        except Exception:  # noqa: BLE001, S110
             pass  # No watchdog task
         finally:
             self.subscribe_task = self.api_helper.create_task(

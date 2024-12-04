@@ -1,17 +1,18 @@
 from __future__ import annotations
-
 from typing import TYPE_CHECKING, NamedTuple
+
+from datetime import datetime
 
 import discord
 
-from wait_for_modal import SimpleModalWaitFor
-from datetime import datetime
+from .wait_for_modal import SimpleModalWaitFor
 
 if TYPE_CHECKING:
-    from iSponsorBlockTV.video import CurrentVideo
-    from src.iSponsorBlockTV.lounge import LoungeAPI
-    from src.types.events import VolumeChanged
     from src.types.video import Video
+    from src.types.events import VolumeChanged
+
+    from ..video import CurrentVideo
+    from ..lounge import LoungeAPI
 
 
 class CurrentSettings(NamedTuple):
@@ -44,7 +45,12 @@ class VideoPlayer(discord.ui.View):
     @staticmethod
     def parse_time(time: str) -> int:
         if ":" in time:
-            hours, minutes, seconds = time.split(":")
+            splitted = time.split(":")
+            if len(splitted) == 2:
+                minutes, seconds = splitted
+                return int(minutes) * 60 + int(seconds)
+
+            hours, minutes, seconds = splitted
             return int(hours) * 3600 + int(minutes) * 60 + int(seconds)
         return int(time)
 
@@ -148,7 +154,7 @@ class VideoPlayer(discord.ui.View):
             input_min_length=1,
             input_max_length=5,
             forced_type=str,
-            input_placeholder="totaal seconds of hh:mm:ss",
+            input_placeholder="totaal seconds of hh:mm:ss or mm:ss or total seconds",
         )
         await interaction.response.send_modal(modal)
         res = await modal.wait()

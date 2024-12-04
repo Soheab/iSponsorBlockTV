@@ -1,15 +1,16 @@
 from __future__ import annotations
+from typing import TYPE_CHECKING, Any
 
 import json
-from typing import TYPE_CHECKING, Any
 
 from .constants import youtube_client_blacklist
 
 if TYPE_CHECKING:
-    from ..types.events import *  # noqa: F403
     from .lounge import LoungeAPI
+    from .types.events import *
 
 __all__ = ("WithEventsHandlers",)
+
 
 class WithEventsHandlers:
     def _handle_state_change(self: LoungeAPI, data: OnStateChange) -> None:  # type: ignore
@@ -59,19 +60,35 @@ class WithEventsHandlers:
                     self._force_disconnect()
 
     def _handle_subtitles_track_changed(self: LoungeAPI, data: VideoData) -> None:  # type: ignore
-        print("Subtitles track changed", data, self.shorts_disconnected, self.api_helper.config.handle_shorts)
+        print(
+            "Subtitles track changed",
+            data,
+            self.shorts_disconnected,
+            self.api_helper.config.handle_shorts,
+        )
         if self.shorts_disconnected and self.api_helper.config.handle_shorts:
             video_id_saved = data.get("videoId", None)
             self.shorts_disconnected = False
             self.api_helper.create_task(self.play_video(video_id_saved))
 
     def _handle_lounge_screen_disconnected(self: LoungeAPI, data: dict[str, str]) -> None:  # type: ignore
-        print("Lounge screen disconnected", data, self.shorts_disconnected, self.api_helper.config.handle_shorts)
-        if data and data["reason"] == "disconnectedByUserScreenInitiated" and self.api_helper.config.handle_shorts:
+        print(
+            "Lounge screen disconnected",
+            data,
+            self.shorts_disconnected,
+            self.api_helper.config.handle_shorts,
+        )
+        if (
+            data
+            and data["reason"] == "disconnectedByUserScreenInitiated"
+            and self.api_helper.config.handle_shorts
+        ):
             self.shorts_disconnected = True
 
     def _handle_autoplay_mode_changed(self: LoungeAPI) -> None:  # type: ignore
-        self.api_helper.create_task(self.set_auto_play_mode(self.api_helper.config.autoplay))
+        self.api_helper.create_task(
+            self.set_auto_play_mode(self.api_helper.config.autoplay)
+        )
 
     def _unmute_ad_ended(self: LoungeAPI) -> None:  # type: ignore
         self.logger.info("Ad has ended, unmuting")

@@ -74,6 +74,7 @@ select = [
     "ASYNC",
 ]
 ignore = [
+    "PD",      # pandas
     "G002",    # erroneous issue with %-logging when logging can be confiured for % logging
     "S101",    # use of assert here is a known quantity, blame typing memes
     "PLR2004", # Magic value comparison, may remove later
@@ -93,6 +94,8 @@ ignore = [
     "G004",    # logging using f-strings
     "ERA001",  # commented code
     "TID252",  # prefer relative imports
+    "ANN201",  # missing return type
+    "T201",    # print found
 ]
 unfixable = [
     "ERA", # I don't want anything erroneously detected deleted by this.
@@ -105,3 +108,29 @@ unfixable = [
 "typing.TypeGuard".msg = "TypeGuard is fundamentally unsafe"
 "typing_extensions.TypeIs".msg = "TypeIs is fundamentally unsafe, even when using it as described to be safe"
 "typing_extensions.TypeGuard".msg = "TypeGuard is fundamentally unsafe"
+
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-sort-within-sections = true
+length-sort = true
+length-sort-straight = true
+
+section-order = [
+    "future",
+    "futureXtyping",
+    "standard-library",
+    "third-party",
+    "first-party",
+    "local-folder",
+]
+
+no-lines-before = ["futureXtyping"]
+
+[tool.ruff.lint.isort.sections]
+"futureXtyping" = [
+    "__future__",
+    "typing",
+    "typing_extensions",
+    "collections.abc",
+]

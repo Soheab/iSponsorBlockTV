@@ -15,9 +15,8 @@
 
 
 from __future__ import annotations
-
-from collections.abc import Callable, Hashable, Sized
 from typing import Any
+from collections.abc import Sized, Callable, Hashable
 
 
 class _HashedSeq(list[Any]):

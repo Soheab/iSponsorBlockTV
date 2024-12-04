@@ -1,5 +1,4 @@
-from typing import Literal, NotRequired, TypedDict
-
+from typing import Literal, TypedDict, NotRequired
 
 __all__ = (
     "DeviceInfo",
@@ -18,6 +17,7 @@ __all__ = (
     "KnownEventPayload",
 )
 
+
 class DeviceInfo(TypedDict):
     brand: str
     model: str
@@ -27,9 +27,7 @@ class DeviceInfo(TypedDict):
     chipset: str
     clientName: str
     dialAdditionalDataSupportLevel: Literal["full", "none", "partial"]
-    mdxDialServerType: Literal[
-        "MDX_DIAL_SERVER_TYPE_IN_APP", "MDX_DIAL_SERVER_TYPE_EXTERNAL"
-    ]
+    mdxDialServerType: Literal["MDX_DIAL_SERVER_TYPE_IN_APP", "MDX_DIAL_SERVER_TYPE_EXTERNAL"]
 
 
 class Device(TypedDict):
@@ -42,7 +40,7 @@ class Device(TypedDict):
     id: str
     type: str
     hasCc: NotRequired[str]
-    deviceInfo: NotRequired[str] # DeviceInfo
+    deviceInfo: NotRequired[str]  # DeviceInfo
     receiverIdentityMatchStatus: str
     pairingType: NotRequired[str]
     deviceContext: NotRequired[str]
@@ -125,7 +123,6 @@ class OnHasPreviousNextChanged(TypedDict):
 class PlaylistModified(TypedDict):
     listId: str
     firstVideoId: str
-
 
 
 KnownEventsStr = Literal[

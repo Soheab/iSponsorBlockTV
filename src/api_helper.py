@@ -1,37 +1,35 @@
 from __future__ import annotations
+from typing import TYPE_CHECKING, Any
+from collections.abc import Coroutine
 
+import html
 import asyncio
 import hashlib
-import html
-import json
 import logging
-from collections.abc import Coroutine
 from functools import cached_property
-from typing import TYPE_CHECKING, Any
 
 import aiohttp
 import discord
 
-from iSponsorBlockTV.conditional_ttl_cache import AsyncConditionalTTL
+from src import constants, dial_client
 
-from . import constants, dial_client
-from .sinbad_cache import lrutaskcache
-from .utils import list_to_tuple
+from .cache import lrutaskcache
 
 if TYPE_CHECKING:
-    from ..discord_bot import BlockBotClient
-    from ..types.video import Video, VideoListResponse
-    from .config import ChannelConfig, Config
+    from main import BlockBotClient
+
+    from .config import Config, ChannelConfig
     from .lounge import LoungeAPI
+    from .types.video import Video, VideoListResponse
 
 __all__ = ("APIHelper",)
 
 
 class ProcessSegments:
     def __init__(self, api_helper: APIHelper) -> None:
-        self.web_session = api_helper.web_session
-        self.config = api_helper.config
-        self._api_helper = api_helper
+        self.web_session: aiohttp.ClientSession = api_helper.web_session
+        self.config: Config = api_helper.config
+        self._api_helper: APIHelper = api_helper
 
     async def __get_channel_id(self, video_id: str) -> str | None:
         params = {"id": video_id, "key": self.config.apikey, "part": "snippet"}
@@ -56,10 +54,10 @@ class ProcessSegments:
         channel_id = await self.__get_channel_id(video_id)
         return any(channel["id"] == channel_id for channel in whitelisted_channels)
 
+    # @list_to_tuple
     @lrutaskcache(ttl=300, maxsize=10)
     async def get_segments(self, video_id: str) -> tuple[list[dict[str, int]], bool]:
         if await self.is_whitelisted(video_id):
-            print("whitelisted")
             return [], True
 
         vid_id_hashed = hashlib.sha256(video_id.encode("utf-8")).hexdigest()[:4]
@@ -69,101 +67,96 @@ class ProcessSegments:
             "service": constants.SponsorBlock_service,
         }
         headers = {"Accept": "application/json"}
-        url = constants.SponsorBlock_api + "skipSegments/" + vid_id_hashed
+        url = f"{constants.SponsorBlock_api}skipSegments/{vid_id_hashed}"
+
         async with self.web_session.get(
             url, headers=headers, params=params
         ) as response:
-            response_json = await response.json()
-        if response.status != 200:
-            response_text = await response.text()
-            print(
-                f"Error getting segments for video {video_id}, hashed as {vid_id_hashed}."
-                f" Code: {response.status} - {response_text}"
-            )
-            return [], True
-        for i in response_json:
-            if str(i["videoID"]) == str(video_id):
-                response_json = i
-                break
+            if response.status != 200:
+                logging.error(
+                    f"Error getting segments for video {video_id}, hashed as {vid_id_hashed}. "
+                    f"Code: {response.status} - {response.reason}"
+                )
+                return [], True
 
-        return self.process_segments(response_json)
+            response_json = await response.json()
+
+        segments = [
+            segment for segment in response_json if segment.get("videoID") == video_id
+        ]
+        if not segments:
+            return [], True
+
+        return self.process_segments(segments[0], self.config.minimum_skip_length)
 
     @staticmethod
-    def process_segments(response: dict[Any, Any]) -> tuple[list[dict[str, int]], bool]:
-        print("process_segments response", response)
+    def process_segments(  # noqa: PLR0912
+        response: dict[Any, Any], minimum_skip_length: int
+    ) -> tuple[list[dict[str, int]], bool]:
         segments = []
         ignore_ttl = True
         try:
-            response_segments = response["segments"]
-            # sort by end
+            response_segments = response.get("segments", [])
+            if not response_segments:
+                return segments, ignore_ttl
+
+            # Sort by end time
             response_segments.sort(key=lambda x: x["segment"][1])
-            # extend ends of overlapping segments to make one big segment
-            for i in response_segments:
-                for j in response_segments:
-                    if j["segment"][0] <= i["segment"][1] <= j["segment"][1]:
-                        i["segment"][1] = j["segment"][1]
 
-            # sort by start
+            # Merge overlapping segments by extending their end times
+            for i in range(len(response_segments)):
+                for j in range(i + 1, len(response_segments)):
+                    if (
+                        response_segments[j]["segment"][0]
+                        <= response_segments[i]["segment"][1]
+                    ):
+                        response_segments[i]["segment"][1] = max(
+                            response_segments[i]["segment"][1],
+                            response_segments[j]["segment"][1],
+                        )
+
+            # Sort by start time
             response_segments.sort(key=lambda x: x["segment"][0])
-            # extend starts of overlapping segments to make one big segment
-            for i in reversed(response_segments):
-                for j in reversed(response_segments):
-                    if j["segment"][0] <= i["segment"][0] <= j["segment"][1]:
-                        i["segment"][0] = j["segment"][0]
 
-            for i in response_segments:
-                ignore_ttl = (
-                    ignore_ttl and i["locked"] == 1
-                )  # If all segments are locked, ignore ttl
-                segment = i["segment"]
-                UUID = i["UUID"]
-                segment_dict = {"start": segment[0], "end": segment[1], "UUID": [UUID]}
-                try:
-                    # Get segment before to check if they are too close to each other
-                    segment_before_end = segments[-1]["end"]
-                    segment_before_start = segments[-1]["start"]
-                    segment_before_UUID = segments[-1]["UUID"]
+            # Merge overlapping segments by extending their start times
+            for i in range(len(response_segments) - 1, -1, -1):
+                for j in range(i - 1, -1, -1):
+                    if (
+                        response_segments[j]["segment"][1]
+                        >= response_segments[i]["segment"][0]
+                    ):
+                        response_segments[i]["segment"][0] = min(
+                            response_segments[i]["segment"][0],
+                            response_segments[j]["segment"][0],
+                        )
 
-                except Exception:
-                    segment_before_end = -10
-                if (
-                    segment_dict["start"] - segment_before_end < 1
-                ):  # Less than 1 second apart, combine them and skip them together
-                    segment_dict["start"] = segment_before_start
-                    segment_dict["UUID"].extend(segment_before_UUID)
-                    segments.pop()
-                segments.append(segment_dict)
-        except Exception:
-            pass
+            for segment in response_segments:
+                ignore_ttl = ignore_ttl and segment.get("locked", 0) == 1
+                segment_dict = {
+                    "start": segment["segment"][0],
+                    "end": segment["segment"][1],
+                    "UUID": [segment["UUID"]],
+                }
 
-        print("processed segments", segments)
+                if segments and segment_dict["start"] - segments[-1]["end"] < 1:
+                    segments[-1]["end"] = segment_dict["end"]
+                    segments[-1]["UUID"].extend(segment_dict["UUID"])
+
+                skip_lenght = segment_dict["end"] - segment_dict["start"]
+                # Only add segments greater than minimum skip length
+                if skip_lenght > minimum_skip_length:
+                    segments.append(segment_dict)
+                else:
+                    logging.info(
+                        f"Skipping segment {segment_dict} as it is ({skip_lenght}) less than the minimum skip length of {minimum_skip_length}"  # noqa: E501
+                    )
+
+        except KeyError as e:
+            logging.exception("KeyError processing segments.", exc_info=e)
+        except Exception as e:
+            logging.exception("Unexpected error processing segments.", exc_info=e)
+
         return segments, ignore_ttl
-
-
-class EnsureSession(aiohttp.ClientSession):
-    def __init__(self, web_session: aiohttp.ClientSession) -> None:
-        self._web_session: aiohttp.ClientSession = web_session
-
-    async def _request(self, *args: Any, **kwargs: Any) -> Any:
-        try:
-            return await self.get_session()._request(*args, **kwargs)
-        except aiohttp.ClientConnectionError:
-            self._web_session = aiohttp.ClientSession(
-                connector=self._web_session.connector
-            )
-            return await self.get_session()._request(*args, **kwargs)
-
-    def get_session(self) -> aiohttp.ClientSession:
-        if self._web_session.closed:
-            self._web_session = aiohttp.ClientSession(
-                connector=self._web_session.connector
-            )
-        return self._web_session
-
-    def __getattr__(self, name: str) -> Any:
-        if name == "_request":
-            return self._request
-        return getattr(self.get_session(), name)
 
 
 class APIHelper:
@@ -176,13 +169,13 @@ class APIHelper:
     ) -> None:
         self.config: Config = config
         self.web_session: aiohttp.ClientSession = web_session
+        self.dial_client = dial_client.DialClient(web_session)
         self.discord_client: BlockBotClient | None = discord_client
 
         self.tasks: set[asyncio.Task] = set()
 
         self._current_video_message_id: int | None = None
-
-        #self._segments_processor = ProcessSegments(self)
+        self._segments_processor = ProcessSegments(self)
 
     @cached_property
     def current_video_webhook(self) -> discord.Webhook:
@@ -200,13 +193,14 @@ class APIHelper:
     async def send_current_video_webhook(
         self, lounge: LoungeAPI, video_id: str
     ) -> None:
+        await asyncio.sleep(5)
         webhook = self.current_video_webhook
 
         video = lounge.current_video_data or await self.get_video_from_id(video_id)
         if not video:
             return
 
-        from video_player import VideoPlayer
+        from .components.video_player import VideoPlayer
 
         view = VideoPlayer(video, lounge)
         embed = view.embed
@@ -364,104 +358,23 @@ class APIHelper:
 
         return data["items"][0]
 
-    @list_to_tuple  # Convert list to tuple so it can be used as a key in the cache
-    @AsyncConditionalTTL(
-        time_to_live=300, maxsize=10
-    )  # 5 minutes for non-locked segments
-    async def get_segments(self, vid_id):
-        if await self.is_whitelisted(vid_id):
-            return (
-                [],
-                True,
-            )  # Return empty list and True to indicate that the cache should last forever
-        vid_id_hashed = hashlib.sha256(vid_id.encode("utf-8")).hexdigest()[
-            :4
-        ]  # Hashes video id and gets the first 4 characters
-        params = {
-            "category": self.config.skip_categories,
-            "actionType": constants.SponsorBlock_actiontype,
-            "service": constants.SponsorBlock_service,
-        }
-        headers = {"Accept": "application/json"}
-        url = constants.SponsorBlock_api + "skipSegments/" + vid_id_hashed
-        async with self.web_session.get(
-            url, headers=headers, params=params
-        ) as response:
-            response_json = await response.json()
-        if response.status != 200:
-            response_text = await response.text()
-            print(
-                f"Error getting segments for video {vid_id}, hashed as {vid_id_hashed}."
-                f" Code: {response.status} - {response_text}"
-            )
-            return [], True
-        for i in response_json:
-            if str(i["videoID"]) == str(vid_id):
-                response_json = i
-                break
-        return self.process_segments(response_json)
-
-    @staticmethod
-    def process_segments(response):
-        segments = []
-        ignore_ttl = True
-        try:
-            response_segments = response["segments"]
-            # sort by end
-            response_segments.sort(key=lambda x: x["segment"][1])
-            # extend ends of overlapping segments to make one big segment
-            for i in response_segments:
-                for j in response_segments:
-                    if j["segment"][0] <= i["segment"][1] <= j["segment"][1]:
-                        i["segment"][1] = j["segment"][1]
-
-            # sort by start
-            response_segments.sort(key=lambda x: x["segment"][0])
-            # extend starts of overlapping segments to make one big segment
-            for i in reversed(response_segments):
-                for j in reversed(response_segments):
-                    if j["segment"][0] <= i["segment"][0] <= j["segment"][1]:
-                        i["segment"][0] = j["segment"][0]
-
-            for i in response_segments:
-                ignore_ttl = (
-                    ignore_ttl and i["locked"] == 1
-                )  # If all segments are locked, ignore ttl
-                segment = i["segment"]
-                UUID = i["UUID"]
-                segment_dict = {"start": segment[0], "end": segment[1], "UUID": [UUID]}
-                try:
-                    # Get segment before to check if they are too close to each other
-                    segment_before_end = segments[-1]["end"]
-                    segment_before_start = segments[-1]["start"]
-                    segment_before_UUID = segments[-1]["UUID"]
-
-                except Exception:
-                    segment_before_end = -10
-                if (
-                    segment_dict["start"] - segment_before_end < 1
-                ):  # Less than 1 second apart, combine them and skip them together
-                    segment_dict["start"] = segment_before_start
-                    segment_dict["UUID"].extend(segment_before_UUID)
-                    segments.pop()
-                segments.append(segment_dict)
-        except Exception:
-            pass
-        return segments, ignore_ttl
+    # @lrutaskcache(ttl=300, maxsize=10)
+    async def get_segments(self, video_id: str) -> tuple[list[Any], bool]:
+        return await self._segments_processor.get_segments(video_id)
 
     async def mark_viewed_segments(self, uuids: list[str]) -> None:
         """Marks the segments as viewed in the SponsorBlock API, if skip_count_tracking is enabled.
         Lets the contributor know that someone skipped the segment (thanks)"""
-        if self.config.skip_count_tracking:
-            for i in uuids:
-                url = constants.SponsorBlock_api + "viewedVideoSponsorTime/"
-                params = {"UUID": i}
-                await self.web_session.post(url, params=params)
+        if not self.config.skip_count_tracking:
+            return
+
+        url = f"{constants.SponsorBlock_api}viewedVideoSponsorTime/"
+        tasks = [self.web_session.post(url, params={"UUID": uuid}) for uuid in uuids]
+        await asyncio.gather(*tasks)
 
     async def discover_youtube_devices_dial(self) -> list[Any]:
         """Discovers YouTube devices using DIAL"""
-        return await dial_client.discover(self.web_session)
-        # print(dial_screens)
+        return await self.dial_client.discover()
 
     async def close(self) -> None:
         for task in self.tasks:

@@ -1,14 +1,12 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
-import datetime
-import time
 from enum import Enum
-
+import time
+import datetime
 
 if TYPE_CHECKING:
-    from ..types.events import NowPlaying, OnStateChange
-    from types.video import Video
+    from .types.events import NowPlaying, OnStateChange
 
 __all__ = ("CurrentVideo",)
 
@@ -36,10 +34,7 @@ class CurrentVideo:
 
     def _update(self, data: NowPlaying | OnStateChange) -> None:
         self.data = data
-        if "videoId" in data:
-            self.video_id = data["videoId"]
-        else:
-            self.video_id = None
+        self.video_id = data.get("videoId", None)
 
         self.current_time: float = float(data["currentTime"])
         self.duration: float = float(data["duration"])
@@ -48,16 +43,10 @@ class CurrentVideo:
         self.seekable_start_time: float = float(data["seekableStartTime"])
         self.seekable_end_time: float = float(data["seekableEndTime"])
 
-        self.dt_current_time: datetime.timedelta = datetime.timedelta(
-            seconds=self.current_time
-        )
+        self.dt_current_time: datetime.timedelta = datetime.timedelta(seconds=self.current_time)
         self.dt_duration: datetime.timedelta = datetime.timedelta(seconds=self.duration)
-        self.dt_seekable_start_time: datetime.timedelta = datetime.timedelta(
-            seconds=self.seekable_start_time
-        )
-        self.dt_seekable_end_time: datetime.timedelta = datetime.timedelta(
-            seconds=self.seekable_end_time
-        )
+        self.dt_seekable_start_time: datetime.timedelta = datetime.timedelta(seconds=self.seekable_start_time)
+        self.dt_seekable_end_time: datetime.timedelta = datetime.timedelta(seconds=self.seekable_end_time)
 
         self.timer = time.time()
 
@@ -72,7 +61,7 @@ class CurrentVideo:
             The character used to represent the filled portion of the bar (default is "█").
         empty_char : str, optional
             The character used to represent the empty portion of the bar (default is "░").
-        
+
         Returns
         -------
         str
@@ -92,10 +81,7 @@ class CurrentVideo:
     @property
     def has_ended(self) -> bool:
         elapsed_time = time.time() - self.timer
-        return (
-            self.state == VideoState.STOPPED
-            or (self.current_time + elapsed_time) >= self.duration
-        )
+        return self.state == VideoState.STOPPED or (self.current_time + elapsed_time) >= self.duration
 
     def format_time(self, seconds: float, show_milliseconds: bool = True) -> str:
         hours, remainder = divmod(seconds, 3600)

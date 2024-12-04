@@ -1,8 +1,8 @@
 from __future__ import annotations
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import json
 import pathlib
-from typing import TYPE_CHECKING, Any, TypedDict
 
 from .device_manager import Device
 
@@ -16,10 +16,12 @@ class ChannelConfig(TypedDict):
     id: str
     name: str
 
+
 class CurrentVideoWebhook(TypedDict):
     id: int
     channel_id: int
     token: str
+
 
 class ConfigPayload(TypedDict):
     devices: list[DeviceConfig]
@@ -34,9 +36,12 @@ class ConfigPayload(TypedDict):
     device_name: str
     minimum_skip_length: int
     current_video_webhook: CurrentVideoWebhook
+    discord_bot_token: str
 
 
 class Config:
+    _instance: Config | None = None
+
     __slots__ = (
         "devices",
         "apikey",
@@ -51,22 +56,41 @@ class Config:
         "minimum_skip_length",
         "path",
         "current_video_webhook",
+        "discord_bot_token",
         "_data",
     )
+
+    def __new__(cls, path: str | pathlib.Path) -> Config:
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+
+        return cls._instance
 
     def __init__(self, path: str | pathlib.Path) -> None:
         if isinstance(path, str):
             path = pathlib.Path(path)
 
         self.path: pathlib.Path = path
-        self._data: ConfigPayload = {}  # type: ignore
         self._update()
 
-        if not self._data:
-            msg = "Config file is empty"
-            raise ValueError(msg)
-        
-        
+    def _asdict(self) -> ConfigPayload:
+        data: ConfigPayload = {}  # type: ignore
+        for key in self.__slots__:
+            if key in ("path", "_data"):
+                continue
+
+            if key == "devices":
+                data[key] = [d._asdict() for d in self.devices]
+            else:
+                data[key] = getattr(self, key)
+
+        print("Data", data)
+        return data
+
+    @property
+    def data(self) -> ConfigPayload:
+        return self._asdict()
+
     def _update(
         self,
     ) -> None:
@@ -85,6 +109,7 @@ class Config:
         self.device_name = data.get("device_name", "iSponsorBlockTV")
         self.minimum_skip_length = data.get("minimum_skip_length", 0)
         self.current_video_webhook = data.get("current_video_webhook", {})
+        self.discord_bot_token = data.get("discord_bot_token", "")
 
         if not self.devices:
             msg = "No devices found, please add at least one device"
@@ -94,24 +119,35 @@ class Config:
             msg = "No youtube API key found and channel whitelist is not empty"
             raise ValueError(msg)
 
-        self._data: ConfigPayload = data
-
     def save(self) -> None:
         with self.path.open("w", encoding="utf-8") as file:
-            json.dump(self._data, file, indent=4)
+            json.dump(self._asdict(), file, indent=4)
+
+        self._update()
+
+    def append_device(self, device: DeviceConfig) -> None:
+        self.devices.append(Device(device))
+
+    def remove_device(self, screen_id: str) -> None:
+        for device in self.devices:
+            if device.screen_id == screen_id:
+                self.devices.remove(device)
+                break
+
+    def add_device(
+        self,
+        screen_id: str,
+        name: str,
+        offset: int | None = None,
+    ) -> None:
+        device: DeviceConfig = {
+            "screen_id": screen_id,
+            "name": name,
+            "offset": offset or 0,
+        }
+        self.append_device(device)
 
     def __eq__(self, other: Config) -> bool:
         if isinstance(other, Config):
             return self._data == other._data
         raise NotImplementedError
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name in (
-            "_data",
-            "path",
-        ):
-            super().__setattr__(name, value)
-            return
-
-        super().__setattr__(name, value)
-        self._data[name] = value
