@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from datetime import datetime
 
@@ -8,11 +8,10 @@ import discord
 from .wait_for_modal import SimpleModalWaitFor
 
 if TYPE_CHECKING:
-    from src.types.video import Video
-    from src.types.events import VolumeChanged
-
-    from ..video import CurrentVideo
-    from ..lounge import LoungeAPI
+    from src.video import CurrentVideo
+    from src.lounge import LoungeAPI
+    from src._types.video import Video
+    from src._types.events import VolumeChanged
 
 
 class CurrentSettings(NamedTuple):
@@ -73,9 +72,11 @@ class VideoPlayer(discord.ui.View):
             color=0xFF0000,
         )
         embed.set_image(url=thumbnail)
-        embed.set_author(name=f"{snippet["channelTitle"]} - {self.video['id']}")
+        embed.set_author(name=f"{snippet['channelTitle']} - {self.video['id']}")
 
-        published_at = datetime.strptime(snippet["publishedAt"], "%Y-%m-%dT%H:%M:%SZ")  # type: ignore # noqa: DTZ007
+        published_at = datetime.strptime(  # noqa: DTZ007
+            snippet["publishedAt"], "%Y-%m-%dT%H:%M:%SZ"
+        )
         formatted_published_at = published_at.strftime("%B %d, %Y")
         formatted_published_at_stamp = discord.utils.format_dt(published_at, "R")
 
@@ -90,7 +91,7 @@ class VideoPlayer(discord.ui.View):
                 False,
             ),
             "Statistics": (
-                f"Views: {views}\nLikes: {likes}" f"\nComments: {comments}",
+                f"Views: {views}\nLikes: {likes}\nComments: {comments}",
                 True,
             ),
             "Playback": (
@@ -108,7 +109,7 @@ class VideoPlayer(discord.ui.View):
         label="Previous", style=discord.ButtonStyle.secondary, emoji="⏮️", row=0
     )
     async def previous_button(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self, interaction: discord.Interaction, button: discord.ui.Button[Any]
     ) -> None:
         await interaction.response.defer()
         await self.lounge_controller.previous()
@@ -117,7 +118,7 @@ class VideoPlayer(discord.ui.View):
         label="Play", style=discord.ButtonStyle.success, emoji="▶️", row=1
     )
     async def play_pause_button(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self, interaction: discord.Interaction, button: discord.ui.Button[Any]
     ) -> None:
         await interaction.response.defer()
         await self.lounge_controller.play()
@@ -127,7 +128,7 @@ class VideoPlayer(discord.ui.View):
         label="Pause", style=discord.ButtonStyle.danger, emoji="⏸️", row=1
     )
     async def pause_button(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self, interaction: discord.Interaction, button: discord.ui.Button[Any]
     ) -> None:
         await interaction.response.defer()
         await self.lounge_controller.pause()
@@ -137,7 +138,7 @@ class VideoPlayer(discord.ui.View):
         label="Next", style=discord.ButtonStyle.secondary, emoji="⏭️", row=0
     )
     async def next_button(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self, interaction: discord.Interaction, button: discord.ui.Button[Any]
     ) -> None:
         await interaction.response.defer()
         await self.lounge_controller.next()
@@ -146,7 +147,7 @@ class VideoPlayer(discord.ui.View):
         label="Seek To", style=discord.ButtonStyle.secondary, emoji="⏱️", row=1
     )
     async def seek_button(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self, interaction: discord.Interaction, button: discord.ui.Button[Any]
     ) -> None:
         modal = SimpleModalWaitFor(
             title="Seek To",
@@ -158,7 +159,7 @@ class VideoPlayer(discord.ui.View):
         )
         await interaction.response.send_modal(modal)
         res = await modal.wait()
-        await modal.interaction.response.defer()  # type: ignore
+        await modal.interaction.response.defer()
         if res is True:
             return
 
@@ -172,7 +173,7 @@ class VideoPlayer(discord.ui.View):
         label="Set Volume", style=discord.ButtonStyle.secondary, emoji="🔊", row=1
     )
     async def volume_button(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self, interaction: discord.Interaction, button: discord.ui.Button[Any]
     ) -> None:
         modal = SimpleModalWaitFor(
             title="Set Volume",
@@ -185,7 +186,7 @@ class VideoPlayer(discord.ui.View):
         await interaction.response.send_modal(modal)
         res = await modal.wait()
         if modal.interaction:
-            await modal.interaction.response.defer()  # type: ignore
+            await modal.interaction.response.defer()
         if res is True:
             return
 

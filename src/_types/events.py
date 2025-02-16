@@ -1,20 +1,20 @@
 from typing import Literal, TypedDict, NotRequired
 
 __all__ = (
-    "DeviceInfo",
     "Device",
+    "DeviceInfo",
+    "KnownEventPayload",
+    "KnownEventsStr",
     "LoungeStatus",
-    "SubtitleStyle",
-    "VideoData",
-    "OnStateChange",
-    "PartialNotPlaying",
     "NowPlaying",
-    "VolumeChanged",
     "OAutoplayModeChanged",
     "OnHasPreviousNextChanged",
+    "OnStateChange",
+    "PartialNotPlaying",
     "PlaylistModified",
-    "KnownEventsStr",
-    "KnownEventPayload",
+    "SubtitleStyle",
+    "VideoData",
+    "VolumeChanged",
 )
 
 
@@ -27,7 +27,9 @@ class DeviceInfo(TypedDict):
     chipset: str
     clientName: str
     dialAdditionalDataSupportLevel: Literal["full", "none", "partial"]
-    mdxDialServerType: Literal["MDX_DIAL_SERVER_TYPE_IN_APP", "MDX_DIAL_SERVER_TYPE_EXTERNAL"]
+    mdxDialServerType: Literal[
+        "MDX_DIAL_SERVER_TYPE_IN_APP", "MDX_DIAL_SERVER_TYPE_EXTERNAL"
+    ]
 
 
 class Device(TypedDict):

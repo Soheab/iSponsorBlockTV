@@ -53,9 +53,7 @@ class EnsureSession[C: aiohttp.BaseConnector, CA: Any, CK: Any, CV: Any]:
     def reset_connector(self) -> None:
         self.__session._connector = self._get_connector()
 
-    def request(
-        self, *args: Any, **kwargs: Any
-    ) -> aiohttp.client._RequestContextManager:
+    def request(self, *args: Any, **kwargs: Any) -> aiohttp.client._RequestContextManager:
         return aiohttp.client._RequestContextManager(self._request(*args, **kwargs))
 
     def get(self, *args: Any, **kwargs: Any) -> aiohttp.client._RequestContextManager:
@@ -70,14 +68,15 @@ class EnsureSession[C: aiohttp.BaseConnector, CA: Any, CK: Any, CV: Any]:
     def patch(self, *args: Any, **kwargs: Any) -> aiohttp.client._RequestContextManager:
         return self.request("PATCH", *args, **kwargs)
 
-    def delete(
-        self, *args: Any, **kwargs: Any
-    ) -> aiohttp.client._RequestContextManager:
+    def delete(self, *args: Any, **kwargs: Any) -> aiohttp.client._RequestContextManager:
         return self.request("DELETE", *args, **kwargs)
 
     async def _request(self, *args: Any, **kwargs: Any) -> aiohttp.ClientResponse:
         if self.__session.closed:
             self.reset_connector()
+
+        if "url" in kwargs:
+            kwargs["str_or_url"] = kwargs.pop("url")
 
         try:
             return await self.__session._request(*args, **kwargs)

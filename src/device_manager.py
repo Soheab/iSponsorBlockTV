@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, Any, NoReturn, TypedDict
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, NoReturn, Self, TypedDict
 
 import time
 import asyncio
@@ -36,7 +37,7 @@ class Device:
 
     def __repr__(self) -> str:
         return f"<Device {self.name} ({self.screen_id})>"
-    
+
     def _asdict(self) -> DeviceConfig:
         return {
             "name": self.name,
@@ -47,11 +48,11 @@ class Device:
     async def connect(
         self,
         api_helper: APIHelper,
+        *,
         debug: bool,
     ) -> DeviceManager:
-        inst = DeviceManager(self, api_helper, debug)
-        await inst.start()
-        return inst
+        async with DeviceManager(self, api_helper, debug=debug) as inst:
+            return inst
 
 
 class DeviceManager:
@@ -60,6 +61,7 @@ class DeviceManager:
         device: Device,
         /,
         api_helper: APIHelper,
+        *,
         debug: bool,
     ) -> None:
         self.device: Device = device
@@ -77,9 +79,9 @@ class DeviceManager:
             logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         )
         self.logger.addHandler(sh)
-        self.logger.info(f"Starting device manager for {self.device}")
+        self.logger.info("Starting device manager for %s", self.device)
 
-        self.main_task: asyncio.Task | None = None
+        self.main_task: asyncio.Task[Any] | None = None
         self.controller: LoungeAPI = LoungeAPI(api_helper)
 
     @cached_property
@@ -99,12 +101,29 @@ class DeviceManager:
     #            controller.shorts_disconnected = False
     #            await self.start()
 
+    async def __aenter__(self) -> Self:
+        try:
+            await self.start()
+        except Exception:
+            await self.close()
+            raise
+
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        await self.close()
+
     # Method called on playback state change
     async def __call__(self, state: Any) -> None:
         if self.main_task:
             try:
                 self.main_task.cancel()
-            except:  # noqa: S110
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         time_start = time.time()
@@ -113,10 +132,12 @@ class DeviceManager:
         )
 
     async def start(self) -> None:
-        await self.controller.pair_with_screen_id(
-            screen_id=self.device.screen_id,
-            screen_name=self.device.name,
-        )
+        async with self.controller as controller:
+            self.controller = controller
+            await controller.pair_with_screen_id(
+                screen_id=self.device.screen_id,
+                screen_name=self.device.name,
+            )
 
         self.api_helper.create_task(self.loop())
         self.api_helper.create_task(self.refresh_auth_loop())
@@ -143,12 +164,17 @@ class DeviceManager:
                 try:
                     self.logger.debug("Refreshing auth")
                     await lounge_controller.refresh_auth()
-                except:  # Exception as e:
-                    # self.logger.error("Error refreshing auth: %s. Trying again in 10 seconds.", e)
+                except Exception as e:
+                    self.logger.exception(
+                        "Error refreshing auth: %s. Trying again in 10 seconds.",
+                        exc_info=e,
+                    )
                     # raceback.print_exc()
                     await asyncio.sleep(10)
 
-            while not (await self.is_available()) and not self.cancelled:
+            while (  # noqa: ASYNC110
+                not (await self.is_available()) and not self.cancelled
+            ):
                 await asyncio.sleep(10)
 
             try:
@@ -160,9 +186,8 @@ class DeviceManager:
                 await asyncio.sleep(10)
                 try:
                     await lounge_controller.connect()
-                except:  # Exception as e:  # noqa: S110
-                    # self.logger.error("Error connecting to device: %s.", e)
-                    pass
+                except Exception as e:
+                    self.logger.exception("Error connecting to device: %s.", exc_info=e)
 
             self.logger.info(
                 "Connected to device %s (%s)",
@@ -183,25 +208,27 @@ class DeviceManager:
             try:
                 await self.controller.refresh_auth()
             except Exception as e:
-                self.logger.exception("Error refreshing auth.", exc_info=e)
+                self.logger.exception("Error refreshing auth: %s.", exc_info=e)
                 # traceback.print_exc()
 
     async def is_available(self) -> bool:
         try:
             return await self.controller.is_available()
-        except:  # Exception as e:
-            # self.logger.error("Error checking if device is available: %s.", e)
+        except Exception as e:
+            self.logger.exception(
+                "Error checking if device is available: %s.", exc_info=e
+            )
             return False
 
     # Processes the playback state change
     async def process_playstatus(self, state: Any, time_start: Any) -> None:
         segments = []
         if state.videoId:
-            segments = await self.api_helper.get_segments(state.videoId)
+            segments = await self.controller.get_segments(state.videoId)
         # print("Segments:", segments)
         if state.state.value == 1:  # Playing
             self.logger.info(
-                f"Playing video {state.videoId} with {len(segments)} segments"
+                "Playing video %s with %s segments", state.videoId, len(segments)
             )
             if segments:  # If there are segments
                 await self.time_to_segment(
@@ -237,8 +264,10 @@ class DeviceManager:
                 await self.skip(time_to_next, next_segment["end"], next_segment["UUID"])
 
     # Skips to the next segment (waits for the time to pass)
-    async def skip(self, time_to, position, uuids):
-        logging.info("Skipping segment: seeking to %s in %s seconds", position, time_to)
+    async def skip(self, time_to: float, position: int, uuids: list[str]) -> None:
+        self.logger.info(
+            "Skipping segment: seeking to %s in %s seconds", position, time_to
+        )
         await asyncio.sleep(time_to)
         self.logger.info("Skipping segment: seeking to %s", position)
         await self.api_helper.mark_viewed_segments(uuids)

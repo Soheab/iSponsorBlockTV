@@ -45,21 +45,9 @@ class BlockBotClient(discord.Client):
         self.video_channel: discord.TextChannel | None = None
         self.config: Config = Config("config.json")
 
-    def purge_all_video_messages(self) -> None:
-        async def purge() -> None:
-            if self.video_channel:
-                channel = self.video_channel
-            else:
-                channel: discord.TextChannel = await self.fetch_channel(self.config.current_video_webhook["channel_id"])  # type: ignore
-                self.video_channel = channel  # type: ignore
-
-            await channel.purge(limit=None, check=lambda m: m.id != self.api_helper._current_video_message_id)  # type: ignore
-
-        self.create_task(purge())
-
-    def create_task(self, coro: Any) -> asyncio.Task:
+    def create_task(self, coro: Any) -> asyncio.Task[Any]:
         task = asyncio.create_task(coro)
-        task.add_done_callback(lambda fut: self.tasks.discard(fut))
+        task.add_done_callback(self.tasks.discard)
         self.tasks.add(task)
         return task
 
@@ -70,20 +58,27 @@ class BlockBotClient(discord.Client):
         self.config.save()
 
     async def run_app(self) -> None:
-        self.web_session = EnsureSession(connector_cls=aiohttp.TCPConnector, connector_kwargs={"ttl_dns_cache": 300})  # type: ignore
-        self.api_helper = APIHelper(
-            config=self.config, web_session=self.web_session, discord_client=self
+        self.web_session = EnsureSession(
+            connector_cls=aiohttp.TCPConnector,
+            connector_kwargs={
+                "ttl_dns_cache": 300
+            },  # pyright: ignore[reportAttributeAccessIssue]
         )
+        self.api_helper = APIHelper(config=self.config, web_session=self.web_session)
 
         cdevice: Device
-        for cdevice in self.config.devices:
-            device = DeviceManager(
+
+        async def connect_device(cdevice: Device):
+            async with DeviceManager(
                 cdevice,
                 api_helper=self.api_helper,
                 debug=True,
-            )
-            self.create_task(device.start())
-            self.devices.append(device)
+            ) as device:
+                self.devices.append(device)
+
+        # Create and connect devices
+        for cdevice in self.config.devices:
+            self.create_task(connect_device(cdevice))
 
         self.app_is_running = True
         _log.info("App started")
@@ -111,8 +106,8 @@ class BlockBotClient(discord.Client):
         # await self.sync_commands()
 
     async def close_app(
-        self, disconnect: bool = False, off: bool = False
-    ) -> None:  # noqa: PLR0912
+        self, disconnect: bool = False, off: bool = False  # noqa: FBT001, FBT002
+    ) -> None:
         try:
             _log.info("Closing devices, disconnect? %s", disconnect)
             for device in self.devices:
@@ -121,7 +116,7 @@ class BlockBotClient(discord.Client):
                 _log.info("Closing device")
                 try:
                     await device.close()
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     _log.error("Error closing device: %s", exc_info=e)
                 else:
                     _log.info("Device closed")
@@ -135,8 +130,7 @@ class BlockBotClient(discord.Client):
                         await device.controller.close()
                     except pyytlounge.exceptions.NotConnectedException:
                         _log.debug("Device %s not connected", device.device.name)
-                        pass
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         _log.error("Error disconnecting device: %s", exc_info=e)
                     else:
                         _log.info("Device disconnected")
@@ -144,14 +138,13 @@ class BlockBotClient(discord.Client):
             _log.info("Closing web session %s", self.web_session)
             try:
                 await self.web_session.close()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 _log.error("Error closing web session: %s", exc_info=e)
             else:
                 _log.info("Web session closed")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             _log.error(f"Error closing app: {e}", exc_info=e)
-            pass
 
         self.app_is_running = False
         self.devices = []
@@ -159,7 +152,7 @@ class BlockBotClient(discord.Client):
         for task in self.tasks:
             try:
                 task.cancel()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         self.tasks.clear()
@@ -196,8 +189,10 @@ class Category(discord.Enum):
     filler = "filler"
 
 
-class CategorySelector(discord.ui.Select):
-    def __init__(self):
+class CategorySelector(discord.ui.Select[discord.ui.View]):
+    view: discord.ui.View
+
+    def __init__(self) -> None:
         options = [
             discord.SelectOption(
                 label=category.value,
@@ -226,11 +221,11 @@ class CategorySelector(discord.ui.Select):
         await interaction.response.edit_message(
             content=f"Succesfully updated categories to skip to {skips}", view=None
         )
-        self.view.stop()  # type: ignore
+        self.view.stop()
 
 
 class ChannelSelector(discord.ui.Select[discord.ui.View]):
-    view: discord.ui.View  # type: ignore
+    view: discord.ui.View
 
     def __init__(self, channels: dict[str, tuple[str, str]]) -> None:
         self.channels: dict[str, tuple[str, str]] = channels
@@ -313,6 +308,7 @@ async def change_category(
 @app_commands.allowed_installs(guilds=True, users=True)
 async def change_settings(
     interaction: discord.Interaction,
+    *,
     api_key: str | None = None,
     skip_count_tracking: bool | None = None,
     mute_ads: bool | None = None,
@@ -356,7 +352,6 @@ async def change_settings(
     ):
         updated += f"Minimum skip length updated from {client.config.minimum_skip_length} to {minimum_skip_length}\n"
         client.config.minimum_skip_length = minimum_skip_length
-        print("min", client.config.minimum_skip_length)
 
     if not updated:
         await interaction.response.send_message("No settings updated")
@@ -369,7 +364,7 @@ async def change_settings(
 @client.tree.command(name="get-settings")
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
 @app_commands.allowed_installs(guilds=True, users=True)
-async def get_settings(interaction: discord.Interaction):
+async def get_settings(interaction: discord.Interaction) -> None:
     emb = discord.Embed(title="Current settings")
     formatted_devices = ", ".join(
         [f"{i.name} (ID: {i.screen_id})" for i in client.config.devices]
@@ -399,7 +394,7 @@ async def get_settings(interaction: discord.Interaction):
 @app_commands.allowed_installs(guilds=True, users=True)
 async def whitelist_channel(
     interaction: discord.Interaction, name: str, channel_id: str | None = None
-):
+) -> None:
     if channel_id is not None:
         client.add_channel_whitelist(name, channel_id)
         client.set_app_config()
@@ -409,7 +404,6 @@ async def whitelist_channel(
     channels: list[tuple[str, str, int | str]] = (
         await client.api_helper.search_channels(name)
     )
-    print("channels", channels)
     if not channels:
         await interaction.response.send_message("No channels found with that name")
         return
@@ -450,7 +444,7 @@ async def whitelist_channel(
 @app_commands.allowed_installs(guilds=True, users=True)
 async def manage_video(
     interaction: discord.Interaction,
-):
+) -> None:
     await interaction.response.defer()
     device = client.devices[0]
     controller = device.controller
@@ -479,7 +473,7 @@ class LogHandler(logging.Handler):
         log_prefix = ""
         embed_color = discord.Color.dark_theme()
         if record.levelno == logging.INFO:
-            log_prefix = "ℹ️ **INFO**"  # noqa: RUF001
+            log_prefix = "ℹ️ **INFO**"
             embed_color = discord.Color.blurple()
         elif record.levelno == logging.WARNING:
             log_prefix = "⚠️ **WARNING**"
@@ -492,7 +486,7 @@ class LogHandler(logging.Handler):
             embed_color = discord.Color.yellow()
 
         created = f"<t:{int(record.created)}:R>"
-        print(log)
+        print(log)  # noqa: T201
         emb = discord.Embed(
             title=f"{log_prefix} - {created}",
             description=f"```ansi\n{log}\n```",
@@ -507,4 +501,4 @@ client.run(
     root_logger=True,
     log_handler=LogHandler(),
     log_formatter=discord.utils._ColourFormatter(),
-)  # type: ignore
+)

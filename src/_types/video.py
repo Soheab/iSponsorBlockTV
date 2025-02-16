@@ -1,4 +1,4 @@
-from typing import Dict, List, TypedDict
+from typing import Any, TypedDict
 
 from datetime import datetime
 
@@ -15,13 +15,13 @@ class Localized(TypedDict):
 
 
 class Snippet(TypedDict):
-    publishedAt: datetime
+    publishedAt: str
     channelId: str
     title: str
     description: str
-    thumbnails: Dict[str, Thumbnail]
+    thumbnails: dict[str, Thumbnail]
     channelTitle: str
-    tags: List[str]
+    tags: list[str]
     categoryId: str
     liveBroadcastContent: str
     defaultLanguage: str
@@ -30,8 +30,8 @@ class Snippet(TypedDict):
 
 
 class RegionRestriction(TypedDict):
-    allowed: List[str]
-    blocked: List[str]
+    allowed: list[str]
+    blocked: list[str]
 
 
 class ContentRating(TypedDict):
@@ -55,7 +55,7 @@ class ContentRating(TypedDict):
     cscfRating: str
     czfilmRating: str
     djctqRating: str
-    djctqRatingReasons: List[str]
+    djctqRatingReasons: list[str]
     ecbmctRating: str
     eefilmRating: str
     egfilmRating: str
@@ -64,7 +64,7 @@ class ContentRating(TypedDict):
     fcoRating: str
     fmocRating: str
     fpbRating: str
-    fpbRatingReasons: List[str]
+    fpbRatingReasons: list[str]
     fskRating: str
     grfilmRating: str
     icaaRating: str
@@ -150,9 +150,9 @@ class Player(TypedDict):
 
 
 class TopicDetails(TypedDict):
-    topicIds: List[str]
-    relevantTopicIds: List[str]
-    topicCategories: List[str]
+    topicIds: list[str]
+    relevantTopicIds: list[str]
+    topicCategories: list[str]
 
 
 class RecordingDetails(TypedDict):
@@ -182,8 +182,8 @@ class FileDetails(TypedDict):
     fileSize: int
     fileType: str
     container: str
-    videoStreams: List[VideoStream]
-    audioStreams: List[AudioStream]
+    videoStreams: list[VideoStream]
+    audioStreams: list[AudioStream]
     durationMs: int
     bitrateBps: int
     creationTime: str
@@ -208,15 +208,15 @@ class ProcessingDetails(TypedDict):
 
 class TagSuggestion(TypedDict):
     tag: str
-    categoryRestricts: List[str]
+    categoryRestricts: list[str]
 
 
 class Suggestions(TypedDict):
-    processingErrors: List[str]
-    processingWarnings: List[str]
-    processingHints: List[str]
-    tagSuggestions: List[TagSuggestion]
-    editorSuggestions: List[str]
+    processingErrors: list[str]
+    processingWarnings: list[str]
+    processingHints: list[str]
+    tagSuggestions: list[TagSuggestion]
+    editorSuggestions: list[str]
 
 
 class LiveStreamingDetails(TypedDict):
@@ -234,7 +234,7 @@ class Localization(TypedDict):
 
 
 # Example video data
-example_video = {
+example_video: dict[str, Any] = {
     "kind": "youtube#video",
     "etag": "1Vr41N5DHHEgH1LJRRsLfymxFtg",
     "id": "CULCbB18STM",
@@ -350,7 +350,7 @@ class Video(TypedDict):
     processingDetails: ProcessingDetails
     suggestions: Suggestions
     liveStreamingDetails: LiveStreamingDetails
-    localizations: Dict[str, Localization]
+    localizations: dict[str, Localization]
 
 
 class VideoListResponsePageInfo(TypedDict):
@@ -364,4 +364,4 @@ class VideoListResponse(TypedDict):
     nextPageToken: str
     prevPageToken: str
     pageInfo: VideoListResponsePageInfo
-    items: List[Video]
+    items: list[Video]

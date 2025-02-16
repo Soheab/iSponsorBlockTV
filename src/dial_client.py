@@ -29,9 +29,13 @@ class Handler(ssdp.aio.SSDP):
     def __call__(self) -> "Handler":
         return self
 
-    def response_received(self, response: ssdp.messages.SSDPResponse, addr: Any) -> None:
+    def response_received(
+        self, response: ssdp.messages.SSDPResponse, addr: Any
+    ) -> None:
         """Handle received SSDP responses."""
-        location = next((v for k, v in response.headers if k.lower() == "location"), None)
+        location = next(
+            (v for k, v in response.headers if k.lower() == "location"), None
+        )
         if location:
             self.devices.append(location)
 
@@ -48,7 +52,8 @@ class DialClient:
         cleaned_code = pairing_code.replace("-", "").replace(" ", "")
         return cleaned_code.isdigit() and len(cleaned_code) == 12
 
-    def get_ip(self) -> str:
+    @staticmethod
+    def get_ip() -> str:
         """Get the local IP address."""
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.settimeout(0)
@@ -90,11 +95,19 @@ class DialClient:
         max_wait = 10
         handler = Handler()
 
-        family, addr = network.get_best_family(bind, network.PORT)
+        family, _addr = (
+            network.get_best_family(  # pyright: ignore[reportUnknownMemberType]
+                bind, network.PORT
+            )
+        )
         loop = asyncio.get_event_loop()
         ip_address = self.get_ip()
-        connect = loop.create_datagram_endpoint(handler, family=family, local_addr=(ip_address, None))  # type: ignore
-        transport, protocol = await connect
+        connect = loop.create_datagram_endpoint(
+            handler,
+            family=family,
+            local_addr=(ip_address, None),  # pyright: ignore[reportArgumentType]
+        )
+        transport, _protocol = await connect
 
         target = (network.MULTICAST_ADDRESS_IPV4, network.PORT)
 
@@ -115,7 +128,9 @@ class DialClient:
         finally:
             transport.close()
 
-        devices = await asyncio.gather(*(self.find_youtube_app(location) for location in handler.devices))
+        devices = await asyncio.gather(
+            *(self.find_youtube_app(location) for location in handler.devices)
+        )
         return [device for device in devices if device]
 
     async def discover_devices(self) -> list[dict[str, Any]]:

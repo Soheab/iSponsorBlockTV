@@ -1,162 +1,162 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 from collections.abc import Coroutine
 
+import enum
 import html
 import asyncio
 import hashlib
 import logging
-from functools import cached_property
 
 import aiohttp
-import discord
+from async_utils.task_cache import lrutaskcache
 
 from src import constants, dial_client
 
-from .cache import lrutaskcache
-
 if TYPE_CHECKING:
-    from main import BlockBotClient
+    from src._types.video import Video, VideoListResponse
 
     from .config import Config, ChannelConfig
-    from .lounge import LoungeAPI
-    from .types.video import Video, VideoListResponse
 
 __all__ = ("APIHelper",)
 
 
-class ProcessSegments:
-    def __init__(self, api_helper: APIHelper) -> None:
-        self.web_session: aiohttp.ClientSession = api_helper.web_session
-        self.config: Config = api_helper.config
-        self._api_helper: APIHelper = api_helper
+class Segment(TypedDict):
+    category: str
+    actionType: str
+    segment: list[float]  # [start, end]
+    UUID: str
+    videoDuration: float
+    locked: int
+    votes: int
+    description: str
 
-    async def __get_channel_id(self, video_id: str) -> str | None:
-        params = {"id": video_id, "key": self.config.apikey, "part": "snippet"}
-        url = f"{constants.Youtube_api}videos"
 
-        async with self.web_session.get(url, params=params) as resp:
-            data = await resp.json()
+class SegmentsResponse(TypedDict):
+    videoID: str
+    segments: list[Segment]
 
-        if "error" in data:
-            return None
-        item = data["items"][0]
-        if item["kind"] != "youtube#video":
-            return None
-        return item["snippet"]["channelId"]
 
-    @lrutaskcache(maxsize=100)
-    async def is_whitelisted(self, video_id: str) -> bool:
-        whitelisted_channels = self.config.channel_whitelist
-        if not whitelisted_channels or not self.config.apikey:
-            return False
+class ProcessedSegment(TypedDict):
+    start: float
+    end: float
+    UUID: list[str]
 
-        channel_id = await self.__get_channel_id(video_id)
-        return any(channel["id"] == channel_id for channel in whitelisted_channels)
 
-    # @list_to_tuple
-    @lrutaskcache(ttl=300, maxsize=10)
-    async def get_segments(self, video_id: str) -> tuple[list[dict[str, int]], bool]:
-        if await self.is_whitelisted(video_id):
-            return [], True
+class SegmentsHandleStatus(enum.IntEnum):
+    SUCCESS = enum.auto()
+    NO_DATA = enum.auto()
+    LOCKED = enum.auto()
+    ERROR = enum.auto()
 
+
+class SegmentsHandler:
+    def __init__(self, *, api_helper: APIHelper) -> None:
+        self.api_helper: APIHelper = api_helper
+
+    async def get_video_segments(self, video_id: str) -> list[SegmentsResponse]:
+        """Fetch video segments from the API using the provided video ID."""
         vid_id_hashed = hashlib.sha256(video_id.encode("utf-8")).hexdigest()[:4]
         params = {
-            "category": self.config.skip_categories,
+            "category": self.api_helper.config.skip_categories,
             "actionType": constants.SponsorBlock_actiontype,
             "service": constants.SponsorBlock_service,
         }
         headers = {"Accept": "application/json"}
         url = f"{constants.SponsorBlock_api}skipSegments/{vid_id_hashed}"
 
-        async with self.web_session.get(
-            url, headers=headers, params=params
-        ) as response:
-            if response.status != 200:
-                logging.error(
-                    f"Error getting segments for video {video_id}, hashed as {vid_id_hashed}. "
-                    f"Code: {response.status} - {response.reason}"
-                )
-                return [], True
-
-            response_json = await response.json()
-
-        segments = [
-            segment for segment in response_json if segment.get("videoID") == video_id
-        ]
-        if not segments:
-            return [], True
-
-        return self.process_segments(segments[0], self.config.minimum_skip_length)
-
-    @staticmethod
-    def process_segments(  # noqa: PLR0912
-        response: dict[Any, Any], minimum_skip_length: int
-    ) -> tuple[list[dict[str, int]], bool]:
-        segments = []
-        ignore_ttl = True
         try:
-            response_segments = response.get("segments", [])
-            if not response_segments:
-                return segments, ignore_ttl
+            async with self.api_helper.web_session.get(
+                url, headers=headers, params=params
+            ) as response:
+                response.raise_for_status()
+                return await response.json()
+        except aiohttp.ClientError as e:
+            logging.getLogger(__name__).exception(
+                "Error getting segments for video %s, hashed as %s: %s",
+                video_id,
+                vid_id_hashed,
+                str(e),  # noqa: TRY401
+                exc_info=e,
+            )
+            return []
 
-            # Sort by end time
-            response_segments.sort(key=lambda x: x["segment"][1])
+    def _sort_and_merge_segments(self, segments: list[Segment]) -> list[Segment]:
+        """Sort segments by start time and merge overlapping segments."""
+        if not segments:
+            return []
 
-            # Merge overlapping segments by extending their end times
-            for i in range(len(response_segments)):
-                for j in range(i + 1, len(response_segments)):
-                    if (
-                        response_segments[j]["segment"][0]
-                        <= response_segments[i]["segment"][1]
-                    ):
-                        response_segments[i]["segment"][1] = max(
-                            response_segments[i]["segment"][1],
-                            response_segments[j]["segment"][1],
-                        )
+        segments.sort(key=lambda x: x["segment"][0])
+        merged_segments: list[Segment] = []
+        for segment in segments:
+            if (
+                merged_segments
+                and segment["segment"][0] <= merged_segments[-1]["segment"][1]
+            ):
+                # Merge overlapping segments
+                merged_segments[-1]["segment"][1] = max(
+                    merged_segments[-1]["segment"][1], segment["segment"][1]
+                )
+            else:
+                # Add non-overlapping segment
+                merged_segments.append(segment)
+        return merged_segments
 
-            # Sort by start time
-            response_segments.sort(key=lambda x: x["segment"][0])
+    def _process_segments(
+        self, segments: list[Segment], *, minimum_skip_length: int
+    ) -> list[ProcessedSegment]:
+        """Process segments by merging close segments and filtering by minimum length."""
+        processed_segments: list[ProcessedSegment] = []
+        for segment in segments:
+            segment_dict: ProcessedSegment = {
+                "start": segment["segment"][0],
+                "end": segment["segment"][1],
+                "UUID": [segment["UUID"]],
+            }
 
-            # Merge overlapping segments by extending their start times
-            for i in range(len(response_segments) - 1, -1, -1):
-                for j in range(i - 1, -1, -1):
-                    if (
-                        response_segments[j]["segment"][1]
-                        >= response_segments[i]["segment"][0]
-                    ):
-                        response_segments[i]["segment"][0] = min(
-                            response_segments[i]["segment"][0],
-                            response_segments[j]["segment"][0],
-                        )
+            if (
+                processed_segments
+                and segment_dict["start"] - processed_segments[-1]["end"] < 1
+            ):
+                # Extend the previous segment
+                processed_segments[-1]["end"] = segment_dict["end"]
+                processed_segments[-1]["UUID"].extend(segment_dict["UUID"])
+            else:
+                # Add a new segment
+                processed_segments.append(segment_dict)
 
-            for segment in response_segments:
-                ignore_ttl = ignore_ttl and segment.get("locked", 0) == 1
-                segment_dict = {
-                    "start": segment["segment"][0],
-                    "end": segment["segment"][1],
-                    "UUID": [segment["UUID"]],
-                }
+        # Filter by minimum skip length
+        return [
+            segment
+            for segment in processed_segments
+            if segment["end"] - segment["start"] > minimum_skip_length
+        ]
 
-                if segments and segment_dict["start"] - segments[-1]["end"] < 1:
-                    segments[-1]["end"] = segment_dict["end"]
-                    segments[-1]["UUID"].extend(segment_dict["UUID"])
+    async def get_segments(
+        self, *, video_id: str, minimal_skip_length: int
+    ) -> list[ProcessedSegment]:
+        """Retrieve, sort, and process segments for a video."""
+        segments = await self.get_video_segments(video_id)
+        if not segments:
+            return []
 
-                skip_lenght = segment_dict["end"] - segment_dict["start"]
-                # Only add segments greater than minimum skip length
-                if skip_lenght > minimum_skip_length:
-                    segments.append(segment_dict)
-                else:
-                    logging.info(
-                        f"Skipping segment {segment_dict} as it is ({skip_lenght}) less than the minimum skip length of {minimum_skip_length}"  # noqa: E501
-                    )
+        # Filter segments by video ID
+        filtered_segments = [
+            segment for segment in segments if segment.get("videoID") == video_id
+        ]
+        if not filtered_segments:
+            return []
 
-        except KeyError as e:
-            logging.exception("KeyError processing segments.", exc_info=e)
-        except Exception as e:
-            logging.exception("Unexpected error processing segments.", exc_info=e)
+        # Extract the actual segments from the filtered result
+        segments_list = filtered_segments[0].get("segments", [])
 
-        return segments, ignore_ttl
+        sorted_segments = self._sort_and_merge_segments(segments_list)
+        if not sorted_segments:
+            return []
+
+        return self._process_segments(
+            sorted_segments, minimum_skip_length=minimal_skip_length
+        )
 
 
 class APIHelper:
@@ -165,146 +165,86 @@ class APIHelper:
         *,
         config: Config,
         web_session: aiohttp.ClientSession,
-        discord_client: BlockBotClient | None = None,
     ) -> None:
         self.config: Config = config
         self.web_session: aiohttp.ClientSession = web_session
         self.dial_client = dial_client.DialClient(web_session)
-        self.discord_client: BlockBotClient | None = discord_client
-
-        self.tasks: set[asyncio.Task] = set()
-
-        self._current_video_message_id: int | None = None
-        self._segments_processor = ProcessSegments(self)
-
-    @cached_property
-    def current_video_webhook(self) -> discord.Webhook:
-        if not self.config.current_video_webhook or not self.discord_client:
-            msg = "No current video webhook set or discord client provided"
-            raise ValueError(msg)
-
-        return discord.Webhook.partial(
-            id=int(self.config.current_video_webhook["id"]),
-            token=self.config.current_video_webhook["token"],
-            session=self.web_session,
-            client=self.discord_client,
-        )
-
-    async def send_current_video_webhook(
-        self, lounge: LoungeAPI, video_id: str
-    ) -> None:
-        await asyncio.sleep(5)
-        webhook = self.current_video_webhook
-
-        video = lounge.current_video_data or await self.get_video_from_id(video_id)
-        if not video:
-            return
-
-        from .components.video_player import VideoPlayer
-
-        view = VideoPlayer(video, lounge)
-        embed = view.embed
-        kwgrs = {
-            "view": view,
-            "embed": embed,
-        }
-
-        try:
-            if self._current_video_message_id:
-                await webhook.edit_message(
-                    message_id=self._current_video_message_id,
-                    **kwgrs,
-                )
-            else:
-                if self.discord_client:
-                    self.discord_client.purge_all_video_messages()
-
-                message = await webhook.send(
-                    **kwgrs,
-                    wait=True,
-                )
-                self._current_video_message_id = message.id
-        except discord.HTTPException as e:
-            if self.discord_client:
-                self.discord_client.logs_webhook.send(
-                    f"Error sending current video webhook: {e}"
-                )
-            self._current_video_message_id = None
-            await self.send_current_video_webhook(lounge, video_id)
+        self.tasks: set[asyncio.Task[Any]] = set()
+        self.segments_handler = SegmentsHandler(api_helper=self)
 
     def create_task(
         self, coro: Coroutine[Any, Any, Any] | asyncio.Task[Any]
-    ) -> asyncio.Task:
+    ) -> asyncio.Task[Any]:
+        """Create and track an asyncio task."""
         if isinstance(coro, asyncio.Task):
             return coro
 
         task = asyncio.create_task(coro)
-        task.add_done_callback(lambda fut: self.tasks.discard(fut))
+        task.add_done_callback(self.tasks.discard)
         self.tasks.add(task)
         return task
 
-    @lrutaskcache(maxsize=10)
+    @lrutaskcache(maxsize=100, cache_transform=lambda args, kwargs: ((), kwargs))
     async def get_video_id(
         self,
         *,
         title: str,
         artist: str,
     ) -> tuple[str, str] | None:
-        params: dict[str, str] = {
-            "q": title + " " + artist,
+        """Fetch video ID from YouTube API using title and artist."""
+        params = {
+            "q": f"{title} {artist}",
             "key": self.config.apikey,
             "part": "snippet",
         }
-        url: str = f"{constants.Youtube_api}search"
+        url = f"{constants.Youtube_api}search"
         async with self.web_session.get(url, params=params) as resp:
             data = await resp.json()
 
         if "error" in data:
             return None
 
-        for i in data["items"]:
-            if i["id"]["kind"] != "youtube#video":
+        for item in data["items"]:
+            if item["id"]["kind"] != "youtube#video":
                 continue
-            title_api = html.unescape(i["snippet"]["title"])
-            artist_api = html.unescape(i["snippet"]["channelTitle"])
+            title_api = html.unescape(item["snippet"]["title"])
+            artist_api = html.unescape(item["snippet"]["channelTitle"])
             if title_api == title and artist_api == artist:
-                return i["id"]["videoId"], i["snippet"]["channelId"]
+                return item["id"]["videoId"], item["snippet"]["channelId"]
         return None
 
-    @lrutaskcache(maxsize=100)
-    async def is_whitelisted(self, vid_id: str) -> bool:
+    @lrutaskcache(maxsize=100, cache_transform=lambda args, kwargs: (args[1], {}))
+    async def is_whitelisted(self, video_id: str) -> bool:
+        """Check if the video's channel is whitelisted."""
         whitelisted_channels: list[ChannelConfig] = self.config.channel_whitelist
         if not whitelisted_channels or not self.config.apikey:
             return False
 
-        channel_id = await self.__get_channel_id(vid_id)
-        # check if channel id is in whitelist
+        channel_id = await self.get_channel_id(video_id)
         return any(i["id"] == channel_id for i in whitelisted_channels)
 
-    async def __get_channel_id(
-        self,
-        video_id: str,
-        /,
-    ) -> str | None:
-        params = {"id": video_id, "key": self.config.apikey, "part": "snippet"}
+    @lrutaskcache(maxsize=100, cache_transform=lambda args, kwargs: (args[1], {}))
+    async def get_channel_id(self, video_id: str) -> str | None:
+        """Fetch channel ID for a given video ID."""
+        params = {
+            "id": video_id,
+            "key": self.config.apikey,
+            "part": "snippet",
+        }
         url = f"{constants.Youtube_api}videos"
-
         async with self.web_session.get(url, params=params) as resp:
             data = await resp.json()
 
-        if "error" in data:
+        if "error" in data or not data.get("items"):
             return None
-        data = data["items"][0]
-        if data["kind"] != "youtube#video":
-            return None
-        return data["snippet"]["channelId"]
+        return data["items"][0]["snippet"]["channelId"]
 
-    @lrutaskcache(maxsize=10)
+    @lrutaskcache(maxsize=50, cache_transform=lambda args, kwargs: (args[1], {}))
     async def search_channels(self, channel: str) -> list[Any]:
+        """Search for channels on YouTube."""
         api_key: str = self.config.apikey
-
         channels: list[Any] = []
-        params: dict[str, str] = {
+        params = {
             "q": channel,
             "key": api_key,
             "part": "snippet",
@@ -318,30 +258,32 @@ class APIHelper:
         if "error" in data:
             return channels
 
-        for i in data["items"]:
-            # Get channel subscription number
+        for item in data["items"]:
             params = {
-                "id": i["snippet"]["channelId"],
+                "id": item["snippet"]["channelId"],
                 "key": api_key,
                 "part": "statistics",
             }
-            url: str = constants.Youtube_api + "channels"
+            url = f"{constants.Youtube_api}channels"
             async with self.web_session.get(url, params=params) as resp:
                 channel_data = await resp.json()
 
-            sub_count: str
             statics = channel_data["items"][0]["statistics"]
-            if "hiddenSubscriberCount" in statics:
-                sub_count = "Hidden"
-            else:
-                sub_count = statics["subscriberCount"]
-                sub_count: str = format(sub_count, "_")
-
+            sub_count = (
+                "Hidden"
+                if "hiddenSubscriberCount" in statics
+                else format(int(statics["subscriberCount"]), "_")
+            )
             channels.append(
-                (i["snippet"]["channelId"], i["snippet"]["channelTitle"], sub_count)
+                (
+                    item["snippet"]["channelId"],
+                    item["snippet"]["channelTitle"],
+                    sub_count,
+                )
             )
         return channels
 
+    @lrutaskcache(maxsize=100, cache_transform=lambda args, kwargs: (args[1], {}))
     async def get_video_from_id(self, video_id: str, /) -> Video | None:
         part = "snippet,contentDetails,statistics"
         params: dict[str, str] = {
@@ -358,13 +300,8 @@ class APIHelper:
 
         return data["items"][0]
 
-    # @lrutaskcache(ttl=300, maxsize=10)
-    async def get_segments(self, video_id: str) -> tuple[list[Any], bool]:
-        return await self._segments_processor.get_segments(video_id)
-
     async def mark_viewed_segments(self, uuids: list[str]) -> None:
-        """Marks the segments as viewed in the SponsorBlock API, if skip_count_tracking is enabled.
-        Lets the contributor know that someone skipped the segment (thanks)"""
+        """Mark the segments as viewed in the SponsorBlock API."""
         if not self.config.skip_count_tracking:
             return
 
@@ -373,15 +310,11 @@ class APIHelper:
         await asyncio.gather(*tasks)
 
     async def discover_youtube_devices_dial(self) -> list[Any]:
-        """Discovers YouTube devices using DIAL"""
+        """Discover YouTube devices using DIAL."""
         return await self.dial_client.discover()
 
     async def close(self) -> None:
+        """Cancel all pending tasks and clear the task set."""
         for task in self.tasks:
-            try:
-                await asyncio.sleep(0)
-                task.cancel()
-            except asyncio.CancelledError:
-                pass
-
+            task.cancel()
         self.tasks.clear()

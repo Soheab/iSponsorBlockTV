@@ -6,7 +6,7 @@ import time
 import datetime
 
 if TYPE_CHECKING:
-    from .types.events import NowPlaying, OnStateChange
+    from ._types.events import NowPlaying, OnStateChange
 
 __all__ = ("CurrentVideo",)
 
@@ -43,14 +43,22 @@ class CurrentVideo:
         self.seekable_start_time: float = float(data["seekableStartTime"])
         self.seekable_end_time: float = float(data["seekableEndTime"])
 
-        self.dt_current_time: datetime.timedelta = datetime.timedelta(seconds=self.current_time)
+        self.dt_current_time: datetime.timedelta = datetime.timedelta(
+            seconds=self.current_time
+        )
         self.dt_duration: datetime.timedelta = datetime.timedelta(seconds=self.duration)
-        self.dt_seekable_start_time: datetime.timedelta = datetime.timedelta(seconds=self.seekable_start_time)
-        self.dt_seekable_end_time: datetime.timedelta = datetime.timedelta(seconds=self.seekable_end_time)
+        self.dt_seekable_start_time: datetime.timedelta = datetime.timedelta(
+            seconds=self.seekable_start_time
+        )
+        self.dt_seekable_end_time: datetime.timedelta = datetime.timedelta(
+            seconds=self.seekable_end_time
+        )
 
         self.timer = time.time()
 
-    def progress_bar(self, length: int = 30, fill_char: str = "█", empty_char: str = "░") -> str:
+    def progress_bar(
+        self, length: int = 30, fill_char: str = "█", empty_char: str = "░"
+    ) -> str:
         """Generate a progress bar for the current video.
 
         Parameters
@@ -81,9 +89,13 @@ class CurrentVideo:
     @property
     def has_ended(self) -> bool:
         elapsed_time = time.time() - self.timer
-        return self.state == VideoState.STOPPED or (self.current_time + elapsed_time) >= self.duration
+        return (
+            self.state == VideoState.STOPPED
+            or (self.current_time + elapsed_time) >= self.duration
+        )
 
-    def format_time(self, seconds: float, show_milliseconds: bool = True) -> str:
+    @staticmethod
+    def format_time(seconds: float, *, show_milliseconds: bool = True) -> str:
         hours, remainder = divmod(seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
         milliseconds = int((seconds - int(seconds)) * 1000)
@@ -101,7 +113,8 @@ class CurrentVideo:
 
         return time_str
 
-    def to_struct_time(self, seconds: float) -> time.struct_time:
+    @staticmethod
+    def to_struct_time(seconds: float) -> time.struct_time:
         return time.gmtime(seconds)
 
     @property
