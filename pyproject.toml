@@ -24,8 +24,8 @@ files = ["requirements.txt"]
 "iSponsorBlockTV" = "iSponsorBlockTV.__main__:main"
 
 [build-system]
-requires = ["hatchling", "hatch-requirements-txt"]
-build-backend = "hatchling.build"
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
 
 [tool.pyright]
 pythonVersion = "3.12"
