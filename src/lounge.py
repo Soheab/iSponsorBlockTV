@@ -98,18 +98,13 @@ class LoungeAPI(YtLoungeApi, WithEventsHandlers):
                 self._handle_autoplay_mode_changed
             ),
         }
+        self.conn = (
+            self.api_helper.web_session.connector
+        )  # pyright: ignore[reportAttributeAccessIssue]
+        self.session = self.api_helper.web_session
 
     async def __aenter__(self) -> Self:
-        try:
-            self.conn = (
-                self.api_helper.web_session.connector
-            )  # pyright: ignore[reportAttributeAccessIssue]
-            self.session = self.api_helper.web_session
-        except Exception:
-            await self.close()
-            raise
-        else:
-            return self
+        return self
 
     @cached_property
     def logger(self) -> logging.Logger:
@@ -141,6 +136,7 @@ class LoungeAPI(YtLoungeApi, WithEventsHandlers):
 
     @lrutaskcache(ttl=300, maxsize=50, cache_transform=lambda args, _: (args[1], {}))
     async def get_segments(self, video_id: str) -> list[ProcessedSegment]:
+        print("Getting segments for video with ID %s", video_id)
         if await self.api_helper.is_whitelisted(video_id):
             self.logger.info(
                 "Channel is whitelisted, skipping segments for video with ID %s",

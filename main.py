@@ -68,17 +68,11 @@ class BlockBotClient(discord.Client):
 
         cdevice: Device
 
-        async def connect_device(cdevice: Device):
-            async with DeviceManager(
-                cdevice,
-                api_helper=self.api_helper,
-                debug=True,
-            ) as device:
-                self.devices.append(device)
-
         # Create and connect devices
         for cdevice in self.config.devices:
-            self.create_task(connect_device(cdevice))
+            device = cdevice.connect(api_helper=self.api_helper, debug=True)
+            self.devices.append(device)
+            self.create_task(device.start())
 
         self.app_is_running = True
         _log.info("App started")

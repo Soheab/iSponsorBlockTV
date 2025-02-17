@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .config import Config, ChannelConfig
 
 __all__ = ("APIHelper",)
+_log = logging.getLogger(__name__)
 
 
 class Segment(TypedDict):
@@ -72,11 +73,11 @@ class SegmentsHandler:
                 response.raise_for_status()
                 return await response.json()
         except aiohttp.ClientError as e:
-            logging.getLogger(__name__).exception(
+            _log.exception(
                 "Error getting segments for video %s, hashed as %s: %s",
                 video_id,
                 vid_id_hashed,
-                str(e),  # noqa: TRY401
+                str(e),
                 exc_info=e,
             )
             return []
@@ -136,6 +137,7 @@ class SegmentsHandler:
         self, *, video_id: str, minimal_skip_length: int
     ) -> list[ProcessedSegment]:
         """Retrieve, sort, and process segments for a video."""
+        _log.info("Getting segments for video_id %s", video_id)
         segments = await self.get_video_segments(video_id)
         if not segments:
             return []
@@ -144,13 +146,18 @@ class SegmentsHandler:
         filtered_segments = [
             segment for segment in segments if segment.get("videoID") == video_id
         ]
+        _log.debug(
+            "Found %s segments for video_id %s", len(filtered_segments), video_id
+        )
         if not filtered_segments:
             return []
 
         # Extract the actual segments from the filtered result
         segments_list = filtered_segments[0].get("segments", [])
 
+        _log.debug("Processing %s segments", len(segments_list))
         sorted_segments = self._sort_and_merge_segments(segments_list)
+        _log.info("Merged %s segments", len(sorted_segments))
         if not sorted_segments:
             return []
 
@@ -196,22 +203,35 @@ class APIHelper:
             "q": f"{title} {artist}",
             "key": self.config.apikey,
             "part": "snippet",
+            "type": "video",  # Specify that we only want videos
+            "maxResults": 5,  # Limit the results to reduce unnecessary processing
         }
         url = f"{constants.Youtube_api}search"
-        async with self.web_session.get(url, params=params) as resp:
-            data = await resp.json()
+        try:
+            async with self.web_session.get(url, params=params) as resp:
+                resp.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+                data = await resp.json()
 
-        if "error" in data:
+                if "error" in data:
+                    _log.error("YouTube API error: %s", data.get("error"))
+                    return None
+
+                for item in data["items"]:
+                    title_api = html.unescape(item["snippet"]["title"])
+                    artist_api = html.unescape(item["snippet"]["channelTitle"])
+
+                    # Perform a more robust comparison, handling potential encoding issues
+                    if (
+                        title_api.lower() == title.lower()
+                        and artist_api.lower() == artist.lower()
+                    ):
+                        return item["id"]["videoId"], item["snippet"]["channelId"]
+
+                return None  # No matching video found
+
+        except aiohttp.ClientError as e:
+            _log.exception("Failed to fetch video ID from YouTube API: %s", e)
             return None
-
-        for item in data["items"]:
-            if item["id"]["kind"] != "youtube#video":
-                continue
-            title_api = html.unescape(item["snippet"]["title"])
-            artist_api = html.unescape(item["snippet"]["channelTitle"])
-            if title_api == title and artist_api == artist:
-                return item["id"]["videoId"], item["snippet"]["channelId"]
-        return None
 
     @lrutaskcache(maxsize=100, cache_transform=lambda args, kwargs: (args[1], {}))
     async def is_whitelisted(self, video_id: str) -> bool:

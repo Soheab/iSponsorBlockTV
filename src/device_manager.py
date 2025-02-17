@@ -1,4 +1,5 @@
 from __future__ import annotations
+from calendar import c
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, NoReturn, Self, TypedDict
 
@@ -45,14 +46,13 @@ class Device:
             "offset": self.offset,
         }
 
-    async def connect(
+    def connect(
         self,
         api_helper: APIHelper,
         *,
         debug: bool,
     ) -> DeviceManager:
-        async with DeviceManager(self, api_helper, debug=debug) as inst:
-            return inst
+        return DeviceManager(self, api_helper, debug=debug)
 
 
 class DeviceManager:
@@ -101,23 +101,6 @@ class DeviceManager:
     #            controller.shorts_disconnected = False
     #            await self.start()
 
-    async def __aenter__(self) -> Self:
-        try:
-            await self.start()
-        except Exception:
-            await self.close()
-            raise
-
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        await self.close()
-
     # Method called on playback state change
     async def __call__(self, state: Any) -> None:
         if self.main_task:
@@ -132,12 +115,10 @@ class DeviceManager:
         )
 
     async def start(self) -> None:
-        async with self.controller as controller:
-            self.controller = controller
-            await controller.pair_with_screen_id(
-                screen_id=self.device.screen_id,
-                screen_name=self.device.name,
-            )
+        await self.controller.pair_with_screen_id(
+            screen_id=self.device.screen_id,
+            screen_name=self.device.name,
+        )
 
         self.api_helper.create_task(self.loop())
         self.api_helper.create_task(self.refresh_auth_loop())
