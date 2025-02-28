@@ -11,6 +11,7 @@ import aiohttp
 import discord
 from discord import app_commands
 import pyytlounge
+from discord.backoff import ExponentialBackoff
 import pyytlounge.exceptions
 
 from src.utils import EnsureSession
@@ -22,10 +23,47 @@ from src.components.video_player import VideoPlayer
 _log = logging.getLogger(Path(__file__).parts[-1].split(".")[0])
 
 
+class LogMessage:
+    def __init__(self, record: logging.LogRecord, formatted_message: str) -> None:
+        self.record: logging.LogRecord = record
+        self.formatted_message: str = formatted_message
+
+    def __hash__(self) -> int:
+        return hash(self.record)
+
+    @property
+    def embed(self) -> discord.Embed:
+        record = self.record
+        log = self.formatted_message
+        log_prefix = ""
+        embed_color = discord.Color.dark_theme()
+        if record.levelno == logging.INFO:
+            log_prefix = "ℹ️ **INFO**"
+            embed_color = discord.Color.blurple()
+        elif record.levelno == logging.WARNING:
+            log_prefix = "⚠️ **WARNING**"
+            embed_color = discord.Color.gold()
+        elif record.levelno == logging.ERROR:
+            log_prefix = "❌ **ERROR**"
+            embed_color = discord.Color.red()
+        elif record.levelno == logging.DEBUG:
+            log_prefix = "🐞 **DEBUG**"
+            embed_color = discord.Color.yellow()
+
+        created = f"<t:{int(record.created)}:R>"
+        return discord.Embed(
+            title=f"{log_prefix} - {created}",
+            description=f"```ansi\n{log}\n```",
+            color=embed_color,
+        )
+
+
 class BlockBotClient(discord.Client):
     web_session: aiohttp.ClientSession
     api_helper: APIHelper
     config: Config
+    logs_webhook: discord.Webhook
+    logs_batch: set[LogMessage]
 
     def __init__(self) -> None:
         super().__init__(intents=discord.Intents.none())
@@ -38,12 +76,24 @@ class BlockBotClient(discord.Client):
         self.whitelisted_channels: dict[str, str] = {}
 
         self.app_is_running: bool = False
-        self.logs_webhook: discord.SyncWebhook = discord.SyncWebhook.from_url(
-            "https://canary.discord.com/api/webhooks/1295860248921247804/z8gMrY9qITCJ8TFqNcS7a9uH0ruqBcNMzfhdJHPJqCIAX75ht11-7RLbeb_QyDIV5Iyf",
-        )
 
         self.video_channel: discord.TextChannel | None = None
         self.config: Config = Config("config.json")
+
+        self.logs_batch: set[LogMessage] = set()
+
+    async def send_logs(self) -> None:
+        backoff = ExponentialBackoff()
+        while True:
+            if not self.logs_batch:
+                await asyncio.sleep(1)
+                continue
+
+            chunked = discord.utils.as_chunks(self.logs_batch, 10)
+            for chunk in chunked:
+                await self.logs_webhook.send(embeds=[d.embed for d in chunk])
+                self.logs_batch.difference_update(chunk)
+                await asyncio.sleep(backoff.delay())
 
     def create_task(self, coro: Any) -> asyncio.Task[Any]:
         task = asyncio.create_task(coro)
@@ -60,9 +110,7 @@ class BlockBotClient(discord.Client):
     async def run_app(self) -> None:
         self.web_session = EnsureSession(
             connector_cls=aiohttp.TCPConnector,
-            connector_kwargs={
-                "ttl_dns_cache": 300
-            },  # pyright: ignore[reportAttributeAccessIssue]
+            connector_kwargs={"ttl_dns_cache": 300},  # pyright: ignore[reportAttributeAccessIssue]
         )
         self.api_helper = APIHelper(config=self.config, web_session=self.web_session)
 
@@ -92,15 +140,22 @@ class BlockBotClient(discord.Client):
         await self.tree.sync(guild=discord.Object(1237899371773694102))
 
     async def setup_hook(self) -> None:
+        self.logs_webhook = discord.Webhook.from_url(
+            "https://canary.discord.com/api/webhooks/1295860248921247804/z8gMrY9qITCJ8TFqNcS7a9uH0ruqBcNMzfhdJHPJqCIAX75ht11-7RLbeb_QyDIV5Iyf",
+            client=self,
+        )
         self.set_app_config()
         _log.info(f"Logged in as {self.user}")
 
         self.create_task(self.run_app())
+        self.create_task(self.send_logs())
 
         # await self.sync_commands()
 
     async def close_app(
-        self, disconnect: bool = False, off: bool = False  # noqa: FBT001, FBT002
+        self,
+        disconnect: bool = False,
+        off: bool = False,  # noqa: FBT001, FBT002
     ) -> None:
         try:
             _log.info("Closing devices, disconnect? %s", disconnect)
@@ -360,9 +415,9 @@ async def change_settings(
 @app_commands.allowed_installs(guilds=True, users=True)
 async def get_settings(interaction: discord.Interaction) -> None:
     emb = discord.Embed(title="Current settings")
-    formatted_devices = ", ".join(
-        [f"{i.name} (ID: {i.screen_id})" for i in client.config.devices]
-    )
+    formatted_devices = ", ".join([
+        f"{i.name} (ID: {i.screen_id})" for i in client.config.devices
+    ])
     emb.description = (
         f"**Currently running:** {client.app_is_running}\n\n"
         f"**Devices:** {formatted_devices}\n"
@@ -395,8 +450,8 @@ async def whitelist_channel(
         await interaction.response.send_message(f"Channel {name} whitelisted!")
         return
 
-    channels: list[tuple[str, str, int | str]] = (
-        await client.api_helper.search_channels(name)
+    channels: list[tuple[str, str, int | str]] = await client.api_helper.search_channels(
+        name
     )
     if not channels:
         await interaction.response.send_message("No channels found with that name")
@@ -414,9 +469,7 @@ async def whitelist_channel(
     slct = ChannelSelector(channel_dict)
     view.add_item(slct)
 
-    await interaction.response.send_message(
-        "Select the channel to whitelist", view=view
-    )
+    await interaction.response.send_message("Select the channel to whitelist", view=view)
     await view.wait()
 
     if slct.selected is None:
@@ -464,32 +517,12 @@ async def manage_video(
 class LogHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         log = super().format(record)
-        log_prefix = ""
-        embed_color = discord.Color.dark_theme()
-        if record.levelno == logging.INFO:
-            log_prefix = "ℹ️ **INFO**"
-            embed_color = discord.Color.blurple()
-        elif record.levelno == logging.WARNING:
-            log_prefix = "⚠️ **WARNING**"
-            embed_color = discord.Color.gold()
-        elif record.levelno == logging.ERROR:
-            log_prefix = "❌ **ERROR**"
-            embed_color = discord.Color.red()
-        elif record.levelno == logging.DEBUG:
-            log_prefix = "🐞 **DEBUG**"
-            embed_color = discord.Color.yellow()
-
-        created = f"<t:{int(record.created)}:R>"
         print(log)  # noqa: T201
-        emb = discord.Embed(
-            title=f"{log_prefix} - {created}",
-            description=f"```ansi\n{log}\n```",
-            color=embed_color,
-        )
-        client.logs_webhook.send(embed=emb)
+        client.logs_batch.add(LogMessage(record, log))
 
 
 signal.signal(signal.SIGINT, signal.SIG_DFL)
+
 client.run(
     client.config.discord_bot_token,
     root_logger=True,

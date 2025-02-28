@@ -33,7 +33,10 @@ class EnsureSession[C: aiohttp.BaseConnector, CA: Any, CK: Any, CV: Any]:
         self.__connector_kwargs: dict[CK, CV] | None = connector_kwargs
 
         self.__session: aiohttp.ClientSession = aiohttp.ClientSession(
-            *args, connector=self._get_connector(), **kwargs
+            *args,
+            connector=self._get_connector(),
+            timeout=aiohttp.ClientTimeout(total=10, connect=5, sock_read=5),
+            **kwargs,
         )
 
     def __getattr__(self, name: str) -> Any:

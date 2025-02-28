@@ -79,13 +79,9 @@ class LoungeAPI(YtLoungeApi, WithEventsHandlers):
         self.event_to_handler: dict[KnownEvents, Callable[[KnownEventPayload], Any]] = {
             KnownEvents.STATE_CHANGE: always_take_data(self._handle_state_change),
             KnownEvents.NOW_PLAYING: always_take_data(self._handle_now_playing),
-            KnownEvents.AD_STATE_CHANGE: always_take_data(
-                self._handle_add_state_change
-            ),
+            KnownEvents.AD_STATE_CHANGE: always_take_data(self._handle_add_state_change),
             KnownEvents.VOLUME_CHANGED: always_take_data(self._handle_volume_changed),
-            KnownEvents.AUTOPLAY_UP_NEXT: always_take_data(
-                self._handle_autoplay_up_next
-            ),
+            KnownEvents.AUTOPLAY_UP_NEXT: always_take_data(self._handle_autoplay_up_next),
             KnownEvents.AD_PLAYING: always_take_data(self._handle_ad_playing),
             KnownEvents.LOUNGE_STATUS: always_take_data(self._handle_lounge_status),
             KnownEvents.SUBTITLES_TRACK_CHANGED: always_take_data(
@@ -98,9 +94,7 @@ class LoungeAPI(YtLoungeApi, WithEventsHandlers):
                 self._handle_autoplay_mode_changed
             ),
         }
-        self.conn = (
-            self.api_helper.web_session.connector
-        )  # pyright: ignore[reportAttributeAccessIssue]
+        self.conn = self.api_helper.web_session.connector  # pyright: ignore[reportAttributeAccessIssue]
         self.session = self.api_helper.web_session
 
     async def __aenter__(self) -> Self:
@@ -136,7 +130,6 @@ class LoungeAPI(YtLoungeApi, WithEventsHandlers):
 
     @lrutaskcache(ttl=300, maxsize=50, cache_transform=lambda args, _: (args[1], {}))
     async def get_segments(self, video_id: str) -> list[ProcessedSegment]:
-        print("Getting segments for video with ID %s", video_id)
         if await self.api_helper.is_whitelisted(video_id):
             self.logger.info(
                 "Channel is whitelisted, skipping segments for video with ID %s",

@@ -68,7 +68,10 @@ class SegmentsHandler:
 
         try:
             async with self.api_helper.web_session.get(
-                url, headers=headers, params=params
+                url,
+                headers=headers,
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=10),
             ) as response:
                 response.raise_for_status()
                 return await response.json()
@@ -127,11 +130,13 @@ class SegmentsHandler:
                 processed_segments.append(segment_dict)
 
         # Filter by minimum skip length
-        return [
+        segs = [
             segment
             for segment in processed_segments
             if segment["end"] - segment["start"] > minimum_skip_length
         ]
+        _log.info("Segments after filtering by minimum length: %s", len(segs))
+        return segs
 
     async def get_segments(
         self, *, video_id: str, minimal_skip_length: int
@@ -139,6 +144,7 @@ class SegmentsHandler:
         """Retrieve, sort, and process segments for a video."""
         _log.info("Getting segments for video_id %s", video_id)
         segments = await self.get_video_segments(video_id)
+        _log.debug("Received %s segments", len(segments))
         if not segments:
             return []
 
@@ -146,21 +152,21 @@ class SegmentsHandler:
         filtered_segments = [
             segment for segment in segments if segment.get("videoID") == video_id
         ]
-        _log.debug(
-            "Found %s segments for video_id %s", len(filtered_segments), video_id
-        )
+        _log.debug("Found %s segments for video_id %s", len(filtered_segments), video_id)
         if not filtered_segments:
             return []
 
         # Extract the actual segments from the filtered result
         segments_list = filtered_segments[0].get("segments", [])
 
-        _log.debug("Processing %s segments", len(segments_list))
+        _log.debug("Sorting %s segments", len(segments_list))
         sorted_segments = self._sort_and_merge_segments(segments_list)
         _log.info("Merged %s segments", len(sorted_segments))
         if not sorted_segments:
+            _log.debug("No segments found for video_id %s", video_id)
             return []
 
+        _log.debug("Processing segments for video_id %s", video_id)
         return self._process_segments(
             sorted_segments, minimum_skip_length=minimal_skip_length
         )
@@ -294,13 +300,11 @@ class APIHelper:
                 if "hiddenSubscriberCount" in statics
                 else format(int(statics["subscriberCount"]), "_")
             )
-            channels.append(
-                (
-                    item["snippet"]["channelId"],
-                    item["snippet"]["channelTitle"],
-                    sub_count,
-                )
-            )
+            channels.append((
+                item["snippet"]["channelId"],
+                item["snippet"]["channelTitle"],
+                sub_count,
+            ))
         return channels
 
     @lrutaskcache(maxsize=100, cache_transform=lambda args, kwargs: (args[1], {}))
