@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Any, Literal
+from collections.abc import Sequence
 
 import os
 import signal
@@ -12,6 +13,7 @@ import discord
 from discord import app_commands
 import pyytlounge
 from discord.backoff import ExponentialBackoff
+from async_utils.waterfall import Waterfall
 import pyytlounge.exceptions
 
 from src.utils import EnsureSession
@@ -30,6 +32,9 @@ class LogMessage:
 
     def __hash__(self) -> int:
         return hash(self.record)
+
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__} {self.record.levelname}>"
 
     @property
     def embed(self) -> discord.Embed:
@@ -63,7 +68,6 @@ class BlockBotClient(discord.Client):
     api_helper: APIHelper
     config: Config
     logs_webhook: discord.Webhook
-    logs_batch: set[LogMessage]
 
     def __init__(self) -> None:
         super().__init__(intents=discord.Intents.none())
@@ -80,20 +84,17 @@ class BlockBotClient(discord.Client):
         self.video_channel: discord.TextChannel | None = None
         self.config: Config = Config("config.json")
 
-        self.logs_batch: set[LogMessage] = set()
+        self.logs_sender: Waterfall[LogMessage] = Waterfall(
+            max_wait=5,
+            max_quantity=10,
+            async_callback=self.send_logs,
+        )
 
-    async def send_logs(self) -> None:
-        backoff = ExponentialBackoff()
-        while True:
-            if not self.logs_batch:
-                await asyncio.sleep(1)
-                continue
+    async def send_logs(self, batch: Sequence[LogMessage]) -> None:
+        if not batch:
+            return
 
-            chunked = discord.utils.as_chunks(self.logs_batch, 10)
-            for chunk in chunked:
-                await self.logs_webhook.send(embeds=[d.embed for d in chunk])
-                self.logs_batch.difference_update(chunk)
-                await asyncio.sleep(backoff.delay())
+        await self.logs_webhook.send(embeds=[d.embed for d in batch])
 
     def create_task(self, coro: Any) -> asyncio.Task[Any]:
         task = asyncio.create_task(coro)
@@ -148,7 +149,6 @@ class BlockBotClient(discord.Client):
         _log.info(f"Logged in as {self.user}")
 
         self.create_task(self.run_app())
-        self.create_task(self.send_logs())
 
         # await self.sync_commands()
 
@@ -518,14 +518,21 @@ class LogHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         log = super().format(record)
         print(log)  # noqa: T201
-        client.logs_batch.add(LogMessage(record, log))
+        client.logs_sender.put(LogMessage(record, log))
 
 
 signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-client.run(
-    client.config.discord_bot_token,
-    root_logger=True,
-    log_handler=LogHandler(),
-    log_formatter=discord.utils._ColourFormatter(),
-)
+
+async def main() -> None:
+    client.logs_sender.start()
+
+    discord.utils.setup_logging(
+        root=True,
+        handler=LogHandler(),
+        formatter=discord.utils._ColourFormatter(),
+    )
+    await client.start(client.config.discord_bot_token)
+
+
+asyncio.run(main())

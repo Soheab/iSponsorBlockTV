@@ -34,14 +34,14 @@ reportPrivateUsage = false
 reportUnnecessaryIsInstance = false
 reportMissingTypeStubs = false
 typeCheckingMode = "strict"
-exclude = ["events_handlers.py"]
+exclude = ["events_handlers.py", "*venv*", "*site-packages*"]
 
 [tool.ruff]
 
 line-length = 90
 target-version = "py312"
 preview = true
-exclude = ["events_handlers.py"]
+exclude = ["events_handlers.py", "*venv*", "*site-packages*"]
 
 [tool.ruff.format]
 line-ending = "lf"

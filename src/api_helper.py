@@ -110,9 +110,34 @@ class SegmentsHandler:
         self, segments: list[Segment], *, minimum_skip_length: int
     ) -> list[ProcessedSegment]:
         """Process segments by merging close segments and filtering by minimum length."""
+        if not segments:
+            return []
+
+        # Sort by end time
+        segments.sort(key=lambda x: x["segment"][1])
+
+        # Extend ends of overlapping segments to make one big segment
+        for i in range(len(segments)):
+            for j in range(i + 1, len(segments)):
+                if segments[j]["segment"][0] <= segments[i]["segment"][1]:
+                    segments[i]["segment"][1] = max(
+                        segments[i]["segment"][1], segments[j]["segment"][1]
+                    )
+
+        # Sort by start time
+        segments.sort(key=lambda x: x["segment"][0])
+
+        # Extend starts of overlapping segments to make one big segment
+        for i in range(len(segments) - 1, -1, -1):
+            for j in range(i - 1, -1, -1):
+                if segments[j]["segment"][1] >= segments[i]["segment"][0]:
+                    segments[i]["segment"][0] = min(
+                        segments[i]["segment"][0], segments[j]["segment"][0]
+                    )
+
         processed_segments: list[ProcessedSegment] = []
         for segment in segments:
-            segment_dict: ProcessedSegment = {
+            segment_dict = {
                 "start": segment["segment"][0],
                 "end": segment["segment"][1],
                 "UUID": [segment["UUID"]],
@@ -122,21 +147,15 @@ class SegmentsHandler:
                 processed_segments
                 and segment_dict["start"] - processed_segments[-1]["end"] < 1
             ):
-                # Extend the previous segment
+                # Combine segments that are less than 1 second apart
                 processed_segments[-1]["end"] = segment_dict["end"]
                 processed_segments[-1]["UUID"].extend(segment_dict["UUID"])
             else:
-                # Add a new segment
-                processed_segments.append(segment_dict)
+                # Only add segments greater than minimum skip length
+                if segment_dict["end"] - segment_dict["start"] > minimum_skip_length:
+                    processed_segments.append(segment_dict)
 
-        # Filter by minimum skip length
-        segs = [
-            segment
-            for segment in processed_segments
-            if segment["end"] - segment["start"] > minimum_skip_length
-        ]
-        _log.info("Segments after filtering by minimum length: %s", len(segs))
-        return segs
+        return processed_segments
 
     async def get_segments(
         self, *, video_id: str, minimal_skip_length: int
@@ -159,16 +178,16 @@ class SegmentsHandler:
         # Extract the actual segments from the filtered result
         segments_list = filtered_segments[0].get("segments", [])
 
-        _log.debug("Sorting %s segments", len(segments_list))
-        sorted_segments = self._sort_and_merge_segments(segments_list)
-        _log.info("Merged %s segments", len(sorted_segments))
-        if not sorted_segments:
-            _log.debug("No segments found for video_id %s", video_id)
-            return []
+        # _log.debug("Sorting %s segments", len(segments_list))
+        # sorted_segments = self._sort_and_merge_segments(segments_list)
+        # _log.info("Merged %s segments", len(sorted_segments))
+        # if not sorted_segments:
+        #  _log.debug("No segments found for video_id %s", video_id)
+        #   return []
 
         _log.debug("Processing segments for video_id %s", video_id)
         return self._process_segments(
-            sorted_segments, minimum_skip_length=minimal_skip_length
+            segments_list, minimum_skip_length=minimal_skip_length
         )
 
 
