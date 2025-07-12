@@ -1,10 +1,10 @@
 [project]
 name = "iSponsorBlockTV"
-version = "2.0.6"
-authors = [{ "name" = "dmunozv04" }]
 description = "SponsorBlock client for all YouTube TV clients"
 readme = "README.md"
 requires-python = ">=3.12"
+version = "2.5.3"
+authors = [{ "name" = "dmunozv04" }]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
@@ -37,8 +37,7 @@ typeCheckingMode = "strict"
 exclude = ["events_handlers.py", "*venv*", "*site-packages*"]
 
 [tool.ruff]
-
-line-length = 90
+line-length = 125
 target-version = "py312"
 preview = true
 exclude = ["events_handlers.py", "*venv*", "*site-packages*"]
