@@ -17,6 +17,18 @@ class VideoState(Enum):
     PLAYING = "1"
     PAUSED = "2"
     BUFFERING = "3"  # ?
+    Advertisement = "1081"
+    AdvertisementPlaying = "1082"  # ???
+
+    def __new__(cls, value):
+        for member in cls:
+            if member.value == value:
+                return member
+        # fallback: create a new member with the given value
+        obj = object.__new__(cls)
+        obj._value_ = value
+        obj._name_ = f"UNKNOWN_{value}"
+        return obj
 
 
 class CurrentVideo:
@@ -43,22 +55,14 @@ class CurrentVideo:
         self.seekable_start_time: float = float(data["seekableStartTime"])
         self.seekable_end_time: float = float(data["seekableEndTime"])
 
-        self.dt_current_time: datetime.timedelta = datetime.timedelta(
-            seconds=self.current_time
-        )
+        self.dt_current_time: datetime.timedelta = datetime.timedelta(seconds=self.current_time)
         self.dt_duration: datetime.timedelta = datetime.timedelta(seconds=self.duration)
-        self.dt_seekable_start_time: datetime.timedelta = datetime.timedelta(
-            seconds=self.seekable_start_time
-        )
-        self.dt_seekable_end_time: datetime.timedelta = datetime.timedelta(
-            seconds=self.seekable_end_time
-        )
+        self.dt_seekable_start_time: datetime.timedelta = datetime.timedelta(seconds=self.seekable_start_time)
+        self.dt_seekable_end_time: datetime.timedelta = datetime.timedelta(seconds=self.seekable_end_time)
 
         self.timer = time.time()
 
-    def progress_bar(
-        self, length: int = 30, fill_char: str = "█", empty_char: str = "░"
-    ) -> str:
+    def progress_bar(self, length: int = 30, fill_char: str = "█", empty_char: str = "░") -> str:
         """Generate a progress bar for the current video.
 
         Parameters
@@ -89,10 +93,7 @@ class CurrentVideo:
     @property
     def has_ended(self) -> bool:
         elapsed_time = time.time() - self.timer
-        return (
-            self.state == VideoState.STOPPED
-            or (self.current_time + elapsed_time) >= self.duration
-        )
+        return self.state == VideoState.STOPPED or (self.current_time + elapsed_time) >= self.duration
 
     @staticmethod
     def format_time(seconds: float, *, show_milliseconds: bool = True) -> str:
