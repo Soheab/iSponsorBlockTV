@@ -2,20 +2,20 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Self, ParamSpec
 from collections.abc import Callable
 
-from enum import Enum
 import sys
+from enum import Enum
 import time
+from uuid import uuid4
 import asyncio
+import inspect
 import logging
 from functools import cached_property
-from uuid import uuid4
-import inspect
 
 from pyytlounge import YtLoungeApi
-from async_utils.task_cache import lrutaskcache
-from pyytlounge.exceptions import NotLinkedException
 from pyytlounge.util import as_aiter
 from pyytlounge.wrapper import api_base
+from pyytlounge.exceptions import NotLinkedException
+from async_utils.task_cache import lrutaskcache
 
 from .video import CurrentVideo
 from .events_handlers import WithEventsHandlers
