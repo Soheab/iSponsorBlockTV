@@ -19,6 +19,7 @@ class VideoState(Enum):
     BUFFERING = "3"  # ?
     Advertisement = "1081"
     AdvertisementPlaying = "1082"  # ???
+    UNKNOWN_5 = "5"
 
     def __new__(cls, value):
         for member in cls:

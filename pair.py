@@ -2,13 +2,15 @@ import asyncio
 
 import aiohttp
 
-from src.dial_client import discover
+from src.dial_client import DialClient
 
 
-async def main():
+async def main() -> None:
     async with aiohttp.ClientSession() as session:
-        devices = await discover(session)
-        print(f"devices: {devices}")
+        client = DialClient(session)
+        devices = await client.discover_devices()
+        for device in devices:
+            print(device)
 
 
 asyncio.run(main())

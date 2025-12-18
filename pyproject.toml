@@ -11,10 +11,15 @@ classifiers = [
     "Operating System :: OS Independent",
     "Topic :: Home Automation",
 ]
-dynamic = ["dependencies"]
+dependencies = [
+    "aiohttp>=3.10",
+    "pyytlounge==2.3.0",
+    "ssdp==1.3.0",
+    "xmltodict==0.13.0",
+    "mikeshardmind-async-utils @ git+https://github.com/mikeshardmind/async-utils",
+    "discord.py @ git+https://github.com/rapptz/discord.py",
+]
 
-[tool.hatch.metadata.hooks.requirements_txt]
-files = ["requirements.txt"]
 
 [project.urls]
 "Homepage" = "https://github.com/dmunozv04/iSponsorBlockTV"
